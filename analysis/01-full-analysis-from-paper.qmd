@@ -1,0 +1,1913 @@
+---
+format: pdf
+editor: 
+  markdown: 
+    wrap: 72
+execute: 
+  echo: false
+  message: false
+---
+
+## Setup
+
+```{r load-packages-and-functions}
+
+library(tidyverse)
+library(here)
+library(patchwork)
+
+source(here("analysis", "simulation-functions.R"))
+source(here("analysis", "my-plotting-functions.R"))
+```
+
+```{r set-current-figures-folder-location}
+fig_folder <- here("manuscript", "2024-02-10-ploscompbiol", "figures")
+
+plot_font_size <- 8
+```
+
+## Washington phylodynamic analysis
+
+Read in reporting probability function and prepare tree and fit objects.
+```{r prep-data-trees-fits}
+wash_meta_historic <- read_csv(
+  here("analysis", "data", "washington-historic-delays.csv"),
+  show_col_types = FALSE
+)
+
+wash_meta_historic <- wash_meta_historic |> 
+  mutate(reporting_delay = as.numeric(difftime(
+    reporting_date, 
+    sampling_date, 
+    units = "days"
+  ))) 
+
+wash_rd_90per <- as.numeric(quantile(
+  wash_meta_historic$reporting_delay, 
+  probs = 0.90
+))
+
+wash_rd_fun <- phylodyn2::get_reported_prob_fn(
+  historic_reporting_delays = wash_meta_historic$reporting_delay, 
+  time_grid = 0:(max((wash_meta_historic$reporting_delay)) + 1),
+  return_log_rd_fn = FALSE
+)
+
+# Save this for the simulations base on Washington delays
+write_csv(
+  select(wash_meta_historic, reporting_delay), 
+  file = here(
+    "analysis", 
+    "data", 
+    "delays-for-simulations", 
+    "washington-state", 
+    "historic-delays.csv"
+  )
+)
+
+wash_sample_details <- read_csv(
+  here(
+    "analysis", 
+    "data", 
+    "washington-sample-details.csv"
+  ),
+  show_col_types = FALSE
+)
+
+wash_time_zero_date <- wash_sample_details$max_date[wash_sample_details$scenario == "full"]
+
+wash_trees <- as.list(rep(NA, 3))
+names(wash_trees) <- c("full", "trunc", "obs")
+
+wash_fits <- as.list(rep(NA, 8))
+names(wash_fits) <- c(
+  "full_no_ps", "full_ps", 
+  "trunc_no_ps", "trunc_ps", 
+  "obs_no_ps", "obs_ps", 
+  "obs_ps_rd_offset", "obs_ps_rd_covariate"
+)
+```
+
+Produce plot of Washington COVID data.
+This requires you have the metadata for the SARS-CoV-2 sequences used in this analysis.
+Visit the data README for the accession ID's to provide for your GISAID query to get this metadata.
+```{r produce-wash-data-trio-plot}
+#| eval: false
+
+wash_meta_full <- read_csv(
+  here(
+    "analysis", 
+    "data", 
+    "Washignton-SARS-CoV-2-sequence-files",
+    "metadata-full.csv"
+  ),
+  show_col_types = FALSE
+)
+
+wash_meta_obs <- wash_meta_full |> 
+  filter(reported == TRUE)
+
+wash_num_samples_plot <- wash_meta_full |> 
+  mutate(reported = factor(
+    reported, 
+    levels = c("FALSE", "TRUE"),
+    labels = c("Not reported", "Reported")
+  )) |> 
+  ggplot(aes(x = sampling_date, fill = reported)) +
+  geom_bar(position = "stack") +
+  theme_bw(base_size = plot_font_size) +
+  theme(
+    axis.text.x = element_text(size = plot_font_size, angle = 45, hjust = 1),
+    axis.title.x = element_text(size = plot_font_size),
+    axis.text.y = element_text(size = plot_font_size),
+    axis.title.y = element_text(size = plot_font_size, margin = margin(l = 0, r = 0)),
+    text = element_text(size = plot_font_size),
+    legend.text = element_text(size = plot_font_size),
+    legend.key.size = unit(0.75, "lines"),
+    legend.position = "bottom"
+  ) +
+  labs(
+    x = "Date",
+    y = "Daily number\nof genetic samples",
+    fill = "Reported by August 1st"
+  ) +
+  scale_x_date(
+    date_breaks = "1 months", 
+    date_labels = "%Y-%m-%d"  #"%b %d, %Y"
+  ) +
+  scale_fill_manual(values = c("#9933FF", "black"))
+
+all_cases <- read_csv(
+  here("analysis", "data", "us-states-covid-ny-times.csv"),
+  show_col_types = FALSE
+)
+
+wash_case_plot <- all_cases |> 
+  filter(state == "Washington") |> 
+  filter(date >= as_date("2021-02-01") & date <= as_date("2021-08-01")) |> 
+  mutate(x_date = date) |> 
+  ggplot(aes(x = x_date, y = cases_avg_per_100k)) +
+    geom_point(size = 0.5) +
+    scale_x_date(
+      date_breaks = "1 months", 
+      date_labels = "%Y-%m-%d"
+    ) +
+    theme_bw(base_size = plot_font_size) +
+    theme(
+      axis.text.x = element_text(size = plot_font_size, angle = 45, hjust = 1),
+      axis.title.x = element_text(size = plot_font_size),
+      axis.text.y = element_text(size = plot_font_size),
+      axis.title.y = element_text(size = plot_font_size, margin = margin(l = 0, r = 0)),
+      text = element_text(size = plot_font_size),
+      legend.text = element_text(size = plot_font_size),
+      strip.text.x = element_blank()
+    ) +
+    xlab("Date") +
+    ylab("Average Positive Tests\nper 100k")
+
+wash_prob_reported_plot <- data.frame(
+  t = 0:(max(wash_meta_obs$reporting_delay) + 5)
+) |>
+  mutate(prob_reported = wash_rd_fun(t)) |>
+  ggplot(aes(x = t, y = prob_reported)) +
+    geom_line() +
+    theme_bw(base_size = plot_font_size) +
+    theme(
+      axis.text.x = element_text(size = plot_font_size),
+      axis.title.x = element_text(size = plot_font_size),
+      axis.text.y = element_text(size = plot_font_size),
+      axis.title.y = element_text(size = plot_font_size, margin = margin(l = 0, r = 0)),
+      text = element_text(size = plot_font_size)
+    ) +
+    labs(
+      x = "Sampling time (days)",
+      y = "Probability of\nbeing reported"
+    ) +
+    scale_x_reverse()
+
+wash_case_plot +
+  wash_num_samples_plot +
+  wash_prob_reported_plot + 
+  patchwork::plot_layout(ncol = 3, guides = "collect") &
+  theme(legend.position = "bottom")
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/washington-data-trio-plot.pdf"
+  ),
+  width = 5.25, height = 2.75
+)
+```
+
+Read in trees
+```{r get-trees}
+wash_trees$full <- ape::read.nexus(here(
+  "analysis", 
+  "data", 
+  "washington-genealogies", 
+  "covid-washington-full-max-clade-cred.trees.txt"
+))
+
+wash_trees$obs <- ape::read.nexus(here(
+  "analysis", 
+  "data", 
+  "washington-genealogies", 
+  "covid-washington-obs-max-clade-cred.trees.txt"
+))
+
+wash_trees$trunc <- ape::read.nexus(here(
+  "analysis", 
+  "data", 
+  "washington-genealogies", 
+  "covid-washington-trunc-max-clade-cred.trees.txt"
+))
+```
+
+Fit trees with BNPR, BNPR-PS, and BNPR-PS with reporting probabilities as offset
+```{r fit-wash-trees}
+tree_lengths <- wash_sample_details |> 
+  select(scenario, length) |> 
+  filter(scenario != "historic")
+
+# Grid width 3 days (tree length is in years)
+tree_lengths$grid_lengths <- c(
+  length(seq(min(summarize_phylo(wash_trees$full)$samp_times), max(summarize_phylo(wash_trees$full)$coal_times), by = 3 / 365)) - 1,
+  length(seq(min(summarize_phylo(wash_trees$obs)$samp_times), max(summarize_phylo(wash_trees$obs)$coal_times), by = 3 / 365)) - 1,
+  length(seq(min(summarize_phylo(wash_trees$trunc)$samp_times), max(summarize_phylo(wash_trees$trunc)$coal_times), by = 3 / 365)) - 1
+)
+
+set.seed(1520)
+# No PS
+wash_fits$full_no_ps <- phylodyn2::BNPR(
+  wash_trees$full, 
+  lengthout = tree_lengths$grid_lengths[tree_lengths$scenario == "full"]
+)
+
+set.seed(1520)
+wash_fits$trunc_no_ps <- correct_BNPR_time_zero_offset(
+  phylodyn2::BNPR(
+    wash_trees$trunc, 
+    lengthout = tree_lengths$grid_lengths[tree_lengths$scenario == "trunc"]),
+  time0_offset = wash_sample_details$min_time[wash_sample_details$scenario == "trunc"] / 365.25
+)
+
+set.seed(1520)
+wash_fits$obs_no_ps <- correct_BNPR_time_zero_offset(
+  phylodyn2::BNPR(
+    wash_trees$obs, 
+    lengthout = tree_lengths$grid_lengths[tree_lengths$scenario == "obs"]
+  ),
+  time0_offset = wash_sample_details$min_time[wash_sample_details$scenario == "obs"] / 365.25
+)
+
+# PS
+beta1_mean = 1
+beta1_prec = 1 / (0.5)^2
+
+set.seed(1520)
+wash_fits$full_ps <- phylodyn2::BNPR_PS(
+  wash_trees$full, 
+  lengthout = tree_lengths$grid_lengths[tree_lengths$scenario == "full"], 
+  beta1_mean = beta1_mean, 
+  beta1_prec = beta1_prec
+)
+
+set.seed(1520)
+wash_fits$trunc_ps <- correct_BNPR_time_zero_offset(
+  phylodyn2::BNPR_PS(
+    wash_trees$trunc, 
+    lengthout = tree_lengths$grid_lengths[tree_lengths$scenario == "trunc"],
+    beta1_mean = beta1_mean, 
+    beta1_prec = beta1_prec
+  ),
+  time0_offset = wash_sample_details$min_time[wash_sample_details$scenario == "trunc"] / 365.25
+)
+
+set.seed(1520)
+wash_fits$obs_ps <- correct_BNPR_time_zero_offset(
+  phylodyn2::BNPR_PS(
+    wash_trees$obs, 
+    lengthout = tree_lengths$grid_lengths[tree_lengths$scenario == "obs"],
+    beta1_mean = beta1_mean, 
+    beta1_prec = beta1_prec
+  ),
+  time0_offset = wash_sample_details$min_time[wash_sample_details$scenario == "obs"] / 365.25
+)
+
+set.seed(1520)
+# PS with rd correction
+wash_fits$obs_ps_rd_offset <- phylodyn2::BNPR_PS_with_RD(
+  wash_trees$obs, 
+  lengthout = tree_lengths$grid_lengths[tree_lengths$scenario == "obs"],
+  historic_reporting_delays = wash_meta_historic$reporting_delay / 365.25,
+  rd_as_offset = TRUE,
+  time0_offset_from_sim_rd = wash_sample_details$min_time[wash_sample_details$scenario == "obs"] / 365.25,
+  beta1_mean = beta1_mean, 
+  beta1_prec = beta1_prec
+)
+
+set.seed(1520)
+wash_fits$obs_ps_rd_covariate <-  phylodyn2::BNPR_PS_with_RD(
+  wash_trees$obs, 
+  lengthout = tree_lengths$grid_lengths[tree_lengths$scenario == "obs"],
+  historic_reporting_delays = wash_meta_historic$reporting_delay / 365.25,
+  rd_as_offset = FALSE,
+  time0_offset_from_sim_rd = wash_sample_details$min_time[wash_sample_details$scenario == "obs"] / 365.25,
+  beta1_mean = beta1_mean, 
+  beta1_prec = beta1_prec
+)
+```
+
+Plot results
+```{r produce-real-inference-comparison-plots}
+# Plot for main manuscript to compare models of interest
+plot_single_comparisons_main(
+    est_fits = wash_fits,
+    truncation_time = wash_rd_90per,
+    min_x = min(wash_sample_details$min_date) + days(1), 
+    y_lims = c(0, 35),
+    time_zero_date_for_real_data = wash_time_zero_date,
+    legend_label = "Data Scenario",
+    font_size = plot_font_size
+)
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/washington-inference-main-plot.pdf"
+  ),
+  width = 5.25, height = 3.5
+)
+
+# Plot for Supplemental Materials to compare all models
+plot_single_comparisons_supplemental(
+    est_fits = wash_fits,
+    truncation_time = wash_rd_90per,
+    min_x = min(wash_sample_details$min_date), 
+    y_lims = c(0, 40),
+    time_zero_date_for_real_data = wash_time_zero_date,
+    legend_label = "Data Scenario"
+)
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/real-analysis-Washington/",
+    "washington-inference-all-plot.pdf"
+  ),
+  width = 6.5, height = 6
+)
+
+```
+
+Save preferential sampling coefficients
+```{r save-pref-samp-coefficient-estimates}
+write_csv(
+  bind_rows(
+    wash_fits$full_ps$beta1summ, 
+    wash_fits$obs_ps$beta1summ, 
+    wash_fits$obs_ps_rd_offset$beta1summ,
+    wash_fits$obs_ps_rd_covariate$beta1summ
+  ) |> 
+    mutate(model = c(
+      "full_ps", 
+      "obs_ps", 
+      "obs_ps_rp_offset", 
+      "obs_ps_rp_covariate"
+    )),
+  here("analysis", "output", "washington-analysis", "pref_coeff_est.csv")
+)
+```
+
+
+## Simulations
+
+### Simulations with Washington Reporting Delays
+#### Preparation
+
+```{r set_up_common_simulation_details_w}
+time_zeros <- data.frame(
+  scenario = c("A", "B", "C"),
+  latest_sample_time = c(155, 80, 0)
+)
+
+overall_eff_pop_traj <- function(t, simulation_scenario) {
+  t <- t + time_zeros$latest_sample_time[time_zeros$scenario == simulation_scenario]
+  
+  eff_pop <- rep(NA, length(t))
+  
+  change_point <- 162.687
+  
+  t_more <- t[t >= change_point]
+  t_less <- t[t < change_point]
+  
+  eff_pop[t >= change_point] <- exp((-t_more + 450) / 38) / 21
+  
+  eff_pop[t < change_point] <- -0.000005210909 * t_less^4 + 0.001765818 * t_less^3 - 0.1813455 * t_less^2 + 4.967273 * t_less + 130
+
+  eff_pop
+}
+
+earliest_sample_time <- 300
+
+time_grid_length <- earliest_sample_time + 120 # AKA 3 months from TMRCA until sampling began
+
+pref_sample_beta <- 2
+beta1_prec <- 0.001
+
+# Historic reporting delay information
+wash_meta_historic <- read_csv(
+  file = here(
+    "analysis", 
+    "data", 
+    "delays-for-simulations", 
+    "washington-state",  
+    "historic-delays.csv"
+  ),
+  show_col_types = FALSE
+)
+
+wash_rd_fun <- phylodyn2::get_reported_prob_fn(
+  historic_reporting_delays = wash_meta_historic$reporting_delay, 
+  time_grid = 0:(max((wash_meta_historic$reporting_delay)) + 1),
+  return_log_rd_fn = FALSE
+)
+
+rd_90percentile <- as.numeric(quantile(
+  wash_meta_historic$reporting_delay, 
+  probs = 0.90
+))
+```
+
+#### Run simulations and plot last sim for each scenario
+
+```{r simulate-scenario-a-initial-outbreak}
+#| label: simulate-scenario-a-initial-outbreak
+
+rerun_scenario_a_simulation <- FALSE
+
+# Simulation details -------------------------------------------------------
+
+scenario_a_name <- "scenario-a-initial-outbreak"
+
+output_path_a <- here(
+  "analysis", "output", "simulations", "washington-delays", scenario_a_name
+)
+
+eff_pop_estimation_path_a <- paste0(output_path_a, "/eff_pop_estimation.csv")
+
+pref_samp_coeff_estimation_path_a <- paste0(output_path_a, "/pref_samp_coeff_estimation.csv")
+
+last_sims_estimation_path_a <- paste0(output_path_a, "/last-sims-estimation.rds")
+
+simed_samp_times_path_a <- paste0(output_path_a, "/simed-sampling-times.csv")
+
+set.seed(1625)
+
+eff_pop_traj_a <- function(t) overall_eff_pop_traj(t, simulation_scenario = "A")
+
+latest_sample_time_a <- time_zeros$latest_sample_time[time_zeros$scenario == "A"]
+earliest_sample_time_a <- earliest_sample_time - latest_sample_time_a
+time_grid_length_a <- time_grid_length - latest_sample_time_a
+
+
+num_samples_a <- 1500
+pref_sample_c_a <- num_samples_a / integrate(
+  phylodyn2::traj_beta, 
+  beta = pref_sample_beta,
+  lower =  0, 
+  upper = earliest_sample_time_a, 
+  traj = eff_pop_traj_a
+)$value
+
+# Run simulation ----------------------------------------------------------
+
+if (rerun_scenario_a_simulation) {
+  
+  num_simulations <- 500
+  
+  if (file.exists(eff_pop_estimation_path_a)) {
+    unlink(eff_pop_estimation_path_a)
+  }
+  
+  if (file.exists(pref_samp_coeff_estimation_path_a)) {
+    unlink(pref_samp_coeff_estimation_path_a)
+  } 
+  
+  if (file.exists(last_sims_estimation_path_a)) {
+    unlink(last_sims_estimation_path_a)
+  } 
+  
+  
+  for (sim_iter in 1:num_simulations) {
+    simed_trees_list_a <- sim_trees_rd_comparisons(
+      eff_pop_traj = eff_pop_traj_a, 
+      rd_fun = historic_delays_function,
+      max_time = earliest_sample_time_a,
+      time_grid_length = time_grid_length_a, 
+      pref_sample_c = pref_sample_c_a, 
+      pref_sample_beta = pref_sample_beta,
+      truncation_time = rd_90percentile
+    )
+    
+    est_list_a <- est_eff_pops(
+      simed_trees_list_a, 
+      historic_reporting_delay_data = wash_meta_historic$reporting_delay,
+      lengthout = time_grid_length_a,
+      beta1_mean = 0,
+      beta1_prec = beta1_prec
+    )
+    
+    save_eff_pop_est_summary(
+      est_list = est_list_a, 
+      eff_pop_estimation_path = eff_pop_estimation_path_a,
+      sim_iter = sim_iter
+    )
+    
+    save_beta1_est_summary(
+      est_list = est_list_a, 
+      pref_samp_coeff_estimation_path = pref_samp_coeff_estimation_path_a,
+      sim_iter = sim_iter
+    )
+    
+  }
+  
+  save_sampling_times(
+    simed_trees_list_a, 
+    scenario_name = "a",
+    samp_times_path = simed_samp_times_path_a
+  )
+  
+  saveRDS(est_list_a, last_sims_estimation_path_a)
+
+} else {
+  
+  est_list_a <- readRDS(last_sims_estimation_path_a)
+  
+}
+```
+
+```{r produce-plot-scenario-a-comparison}
+# Fix scenario name differences
+plotting_est_list_a <- est_list_a
+names(plotting_est_list_a)[which(names(est_list_a) == "full_nops")] <- "full_no_ps"
+names(plotting_est_list_a)[which(names(est_list_a) == "trunc41_nops")] <- "trunc_no_ps"
+names(plotting_est_list_a)[which(names(est_list_a) == "trunc41_ps")] <- "trunc_ps"
+names(plotting_est_list_a)[which(names(est_list_a) == "obs_nops")] <- "obs_no_ps"
+names(plotting_est_list_a)[which(names(est_list_a) == "obs_ps_rd_as_offset")] <- "obs_ps_rd_offset"
+names(plotting_est_list_a)[which(names(est_list_a) == "obs_ps_rd_as_fn")] <- "obs_ps_rd_covariate"
+
+plot_single_comparisons_main(
+    est_fits = plotting_est_list_a,
+    truncation_time = rd_90percentile,
+    min_x = 99,
+    y_lims = c(0, 125),
+    eff_pop_traj = eff_pop_traj_a,
+    font_size = plot_font_size
+)
+# Expect warning message about 'fill'. It's because I wanted 'truth' in legend
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/simulations-Washington-delays/",
+    "sim-scenario-a-wash-rds-inference-main-plot.svg"
+  ),
+  width = 6.5, height = 4
+)
+
+plot_single_comparisons_supplemental(
+    est_fits = plotting_est_list_a,
+    truncation_time = rd_90percentile,
+    min_x = min(earliest_sample_time_a, max(est_list_a$full_nops$x)),
+    y_lims = c(0, 125),
+    eff_pop_traj = eff_pop_traj_a
+)
+# Expect warning message about 'fill'. It's because I wanted 'truth' in legend
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/simulations-Washington-delays/",
+    "sim-scenario-a-wash-rds-inference-supplemental-plot.pdf"
+  ),
+  width = 6.5, height = 6
+)
+```
+
+```{r simulate-scenario-b-single-peak}
+#| label: simulate-scenario-b-single-peak
+
+rerun_scenario_b_simulation <- FALSE
+
+# Simulation details -------------------------------------------------------
+
+scenario_b_name <- "scenario-b-single-peak"
+
+output_path_b <- here(
+  "analysis", "output", "simulations", "washington-delays", scenario_b_name
+)
+
+eff_pop_estimation_path_b <- paste0(output_path_b, "/eff_pop_estimation.csv")
+
+pref_samp_coeff_estimation_path_b <- paste0(output_path_b, "/pref_samp_coeff_estimation.csv")
+
+last_sims_estimation_path_b <- paste0(output_path_b, "/last-sims-estimation.rds")
+
+simed_samp_times_path_b <- paste0(output_path_b, "/simed-sampling-times.csv")
+
+set.seed(1626)
+
+eff_pop_traj_b <- function(t) overall_eff_pop_traj(t, simulation_scenario = "B")
+
+latest_sample_time_b <- time_zeros$latest_sample_time[time_zeros$scenario == "B"]
+earliest_sample_time_b <- earliest_sample_time - latest_sample_time_b
+time_grid_length_b <- time_grid_length - latest_sample_time_b
+
+num_samples_b <- 1500
+pref_sample_c_b <- num_samples_b / integrate(
+  phylodyn2::traj_beta, 
+  beta = pref_sample_beta,
+  lower =  0, 
+  upper = earliest_sample_time_b, 
+  traj = eff_pop_traj_b
+)$value
+
+
+# Run simulation ----------------------------------------------------------
+
+if (rerun_scenario_b_simulation) {
+  
+  num_simulations <- 500
+  
+  if (file.exists(eff_pop_estimation_path_b)) {
+    unlink(eff_pop_estimation_path_b)
+  }
+  
+  if (file.exists(pref_samp_coeff_estimation_path_b)) {
+    unlink(pref_samp_coeff_estimation_path_b)
+  } 
+  
+  if (file.exists(last_sims_estimation_path_b)) {
+    unlink(last_sims_estimation_path_b)
+  } 
+  
+  for (sim_iter in 1:num_simulations) {
+    simed_trees_list_b <- sim_trees_rd_comparisons(
+      eff_pop_traj = eff_pop_traj_b, 
+      rd_fun = historic_delays_function,
+      max_time = earliest_sample_time_b,
+      time_grid_length = time_grid_length_b, 
+      pref_sample_c = pref_sample_c_b, 
+      pref_sample_beta = pref_sample_beta,
+      truncation_time = rd_90percentile
+    )
+    
+    est_list_b <- est_eff_pops(
+      simed_trees_list_b, 
+      historic_reporting_delay_data = wash_meta_historic$reporting_delay,
+      lengthout = time_grid_length_b,
+      beta1_mean = 0,
+      beta1_prec = beta1_prec
+    )
+    
+    save_eff_pop_est_summary(
+      est_list = est_list_b, 
+      eff_pop_estimation_path = eff_pop_estimation_path_b,
+      sim_iter = sim_iter
+    )
+    
+    save_beta1_est_summary(
+      est_list = est_list_b, 
+      pref_samp_coeff_estimation_path = pref_samp_coeff_estimation_path_b,
+      sim_iter = sim_iter
+    )
+    
+  }
+  
+  save_sampling_times(
+    simed_trees_list_b, 
+    scenario_name = "b",
+    samp_times_path = simed_samp_times_path_b
+  )
+  
+  saveRDS(est_list_b, last_sims_estimation_path_b)
+
+} else {
+  
+  est_list_b <- readRDS(last_sims_estimation_path_b)
+
+}
+```
+
+```{r produce-plot-scenario-b-comparison}
+# Fix scenario name differences
+plotting_est_list_b <- est_list_b
+names(plotting_est_list_b)[which(names(est_list_b) == "full_nops")] <- "full_no_ps"
+names(plotting_est_list_b)[which(names(est_list_b) == "trunc41_nops")] <- "trunc_no_ps"
+names(plotting_est_list_b)[which(names(est_list_b) == "trunc41_ps")] <- "trunc_ps"
+names(plotting_est_list_b)[which(names(est_list_b) == "obs_nops")] <- "obs_no_ps"
+names(plotting_est_list_b)[which(names(est_list_b) == "obs_ps_rd_as_offset")] <- "obs_ps_rd_offset"
+names(plotting_est_list_b)[which(names(est_list_b) == "obs_ps_rd_as_fn")] <- "obs_ps_rd_covariate"
+
+plot_single_comparisons_main(
+    est_fits = plotting_est_list_b,
+    truncation_time = rd_90percentile,
+    min_x = 99,
+    y_lims = c(0, 150),
+    eff_pop_traj = eff_pop_traj_b,
+    font_size = plot_font_size
+)
+# Expect warning message about 'fill'. It's because I wanted 'truth' in legend
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/simulations-Washington-delays/",
+    "sim-scenario-b-wash-rds-inference-main-plot.pdf"
+  ),
+  width = 6.5, height = 4
+)
+
+plot_single_comparisons_supplemental(
+    est_fits = plotting_est_list_b,
+    truncation_time = rd_90percentile,
+    min_x = min(earliest_sample_time_b, max(est_list_b$full_nops$x)),
+    y_lims = c(0, 150),
+    eff_pop_traj = eff_pop_traj_b
+)
+# Expect warning message about 'fill'. It's because I wanted 'truth' in legend
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/simulations-Washington-delays/",
+    "sim-scenario-b-wash-rds-inference-supplemental-plot.pdf"
+  ),
+  width = 6.5, height = 6
+)
+```
+
+```{r simulate-scenario-c-double-peak}
+#| label: simulate-scenario-c-double-peak
+
+rerun_scenario_c_simulation <- FALSE
+
+# Simulation details -------------------------------------------------------
+
+scenario_c_name <- "scenario-c-double-peak"
+
+output_path_c <- here(
+  "analysis", "output", "simulations", "washington-delays", scenario_c_name
+)
+
+eff_pop_estimation_path_c <- paste0(output_path_c, "/eff_pop_estimation.csv")
+
+pref_samp_coeff_estimation_path_c <- paste0(output_path_c, "/pref_samp_coeff_estimation.csv")
+
+last_sims_estimation_path_c <- paste0(output_path_c, "/last-sims-estimation.rds")
+
+simed_samp_times_path_c <- paste0(output_path_c, "/simed-sampling-times.csv")
+
+set.seed(1627)
+
+eff_pop_traj_c <- function(t) overall_eff_pop_traj(t, simulation_scenario = "C")
+
+earliest_sample_time_c <- earliest_sample_time
+time_grid_length_c <- time_grid_length
+
+num_samples_c <- 1500
+pref_sample_c_c <- num_samples_c / integrate(
+  phylodyn2::traj_beta, 
+  beta = pref_sample_beta,
+  lower =  0, 
+  upper = earliest_sample_time_c, 
+  traj = eff_pop_traj_c
+)$value
+
+# Run simulation ----------------------------------------------------------
+
+if (rerun_scenario_c_simulation) {
+  
+  num_simulations <- 500
+  
+  if (file.exists(eff_pop_estimation_path_c)) {
+    unlink(eff_pop_estimation_path_c)
+  }
+  
+  if (file.exists(pref_samp_coeff_estimation_path_c)) {
+    unlink(pref_samp_coeff_estimation_path_c)
+  } 
+  
+  if (file.exists(last_sims_estimation_path_c)) {
+    unlink(last_sims_estimation_path_c)
+  } 
+  
+  
+  for (sim_iter in 1:num_simulations) {
+    simed_trees_list_c <- sim_trees_rd_comparisons(
+      eff_pop_traj = eff_pop_traj_c, 
+      rd_fun = historic_delays_function,
+      max_time = earliest_sample_time_c,
+      time_grid_length = time_grid_length_c, 
+      pref_sample_c = pref_sample_c_c, 
+      pref_sample_beta = pref_sample_beta,
+      truncation_time = rd_90percentile
+    )
+    
+    est_list_c <- est_eff_pops(
+      simed_trees_list_c, 
+      historic_reporting_delay_data = wash_meta_historic$reporting_delay,
+      lengthout = time_grid_length_c,
+      beta1_mean = 0,
+      beta1_prec = beta1_prec
+    )
+    
+    save_eff_pop_est_summary(
+      est_list = est_list_c, 
+      eff_pop_estimation_path = eff_pop_estimation_path_c,
+      sim_iter = sim_iter
+    )
+    
+    save_beta1_est_summary(
+      est_list = est_list_c, 
+      pref_samp_coeff_estimation_path = pref_samp_coeff_estimation_path_c,
+      sim_iter = sim_iter
+    )
+    
+  }
+  
+  save_sampling_times(
+    simed_trees_list_c, 
+    scenario_name = "c",
+    samp_times_path = simed_samp_times_path_c
+  )
+  
+  saveRDS(est_list_c, last_sims_estimation_path_c)
+  
+} else {
+  
+  est_list_c <- readRDS(last_sims_estimation_path_c)
+  
+}
+```
+
+```{r produce-plot-scenario-c-comparison}
+# Fix scenario name differences
+plotting_est_list_c <- est_list_c
+names(plotting_est_list_c)[which(names(est_list_c) == "full_nops")] <- "full_no_ps"
+names(plotting_est_list_c)[which(names(est_list_c) == "trunc41_nops")] <- "trunc_no_ps"
+names(plotting_est_list_c)[which(names(est_list_c) == "trunc41_ps")] <- "trunc_ps"
+names(plotting_est_list_c)[which(names(est_list_c) == "obs_nops")] <- "obs_no_ps"
+names(plotting_est_list_c)[which(names(est_list_c) == "obs_ps_rd_as_offset")] <- "obs_ps_rd_offset"
+names(plotting_est_list_c)[which(names(est_list_c) == "obs_ps_rd_as_fn")] <- "obs_ps_rd_covariate"
+
+plot_single_comparisons_main(
+    est_fits = plotting_est_list_c,
+    truncation_time = rd_90percentile,
+    min_x = 99,
+    y_lims = c(0, 300),
+    eff_pop_traj = eff_pop_traj_c, 
+    legend_label = "Inference",
+    font_size = plot_font_size
+)
+# Expect warning message about 'fill'. It's because I wanted 'truth' in legend
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/sim-scenario-c-wash-rds-inference-main-plot.pdf"
+  ),
+  width = 5.25, height = 3.5
+)
+
+plot_single_comparisons_supplemental(
+    est_fits = plotting_est_list_c,
+    truncation_time = rd_90percentile,
+    min_x = min(earliest_sample_time_c, max(est_list_c$full_nops$x)),
+    y_lims = c(0, 200),
+    eff_pop_traj = eff_pop_traj_c
+)
+# Expect warning message about 'fill'. It's because I wanted 'truth' in legend
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/simulations-Washington-delays/",
+    "sim-scenario-c-wash-rds-inference-supplemental-plot.pdf"
+  ),
+  width = 6.5, height = 6
+)
+```
+
+```{r plot_simulation_setup}
+sim_prob_reported_plot <- data.frame(
+  t = 0:(max(wash_meta_historic$reporting_delay) + 6)
+) |>
+  mutate(prob_reported = historic_delays_function(t)) |>
+    ggplot(aes(x = t, y = prob_reported)) +
+    geom_line() +
+    theme_bw(base_size = plot_font_size) +
+    theme(
+      axis.text.x = element_text(size = plot_font_size),
+      axis.title.x = element_text(size = plot_font_size),
+      axis.text.y = element_text(size = plot_font_size),
+      axis.title.y = element_text(size = plot_font_size),
+      text = element_text(size = plot_font_size),
+      legend.text = element_text(size = plot_font_size)
+    ) +
+    labs(
+      x = "Sampling time (days)",
+      y = "Probability of\nbeing reported"
+    ) +
+    scale_x_reverse()
+
+sim_eff_pop_traj_plot <- data.frame(
+  x = 0:time_grid_length, 
+  y = overall_eff_pop_traj(0:time_grid_length, simulation_scenario = "C")
+) |>
+  ggplot(aes(x = x, y = y)) +
+  geom_line() +
+  scale_x_reverse() +
+  geom_vline(
+    data = time_zeros, 
+    aes(xintercept = latest_sample_time),
+    linetype = "dashed", 
+    linewidth = 1
+  ) +
+  geom_vline(
+    xintercept = earliest_sample_time, 
+    color = "black", 
+    linetype = "dotted"
+  ) +
+  labs(
+    x = "Time (days)",
+    y = "Effective\nPopulation Size",
+    color = "Latest Sample\nby Scenario"
+  ) +
+  theme_bw(base_size = plot_font_size) +
+  theme(
+    plot.caption = element_text(hjust = 0),
+    axis.text.x = element_text(size = plot_font_size),
+    axis.title.x = element_text(size = plot_font_size),
+    axis.text.y = element_text(size = plot_font_size),
+    axis.title.y = element_text(size = plot_font_size),
+    text = element_text(size = plot_font_size),
+    legend.text = element_text(size = plot_font_size)
+  ) +
+  annotate(
+    "text", label = "Earliest\nSample",
+    x = (earliest_sample_time) - 55, 
+    y = 125, 
+    size = plot_font_size / .pt # base_size / .pt = same size for annotation as base size
+  ) +
+  annotate(
+    "text", label = "A",
+    x = time_zeros$latest_sample_time[time_zeros$scenario == "A"] - 15, 
+    y = 170,
+    size = plot_font_size / .pt
+  ) +
+  annotate(
+    "text", label = "B",
+    x = time_zeros$latest_sample_time[time_zeros$scenario == "B"] - 15, 
+    y = 170,
+    size = plot_font_size / .pt
+  ) +
+  annotate(
+    "text", label = "C",
+    x = time_zeros$latest_sample_time[time_zeros$scenario == "C"] - 15, 
+    y = 170,
+    size = plot_font_size / .pt
+  )
+
+sim_samp_times_df <- read_csv(simed_samp_times_path_a, show_col_types = FALSE) |> 
+  bind_rows(
+    read_csv(simed_samp_times_path_b, show_col_types = FALSE)
+  ) |> 
+  bind_rows(
+    read_csv(simed_samp_times_path_c, show_col_types = FALSE)
+  ) |> 
+  mutate(reported = factor(
+    observed, 
+    levels = c("FALSE", "TRUE"),
+    labels = c("Not reported", "Reported")
+  )) 
+
+sim_samp_times_plot <- sim_samp_times_df |>   
+  ggplot(aes(x = samp_time, fill = reported)) +
+  geom_histogram(binwidth = 3) +
+  facet_wrap(
+    ~ scenario,
+    labeller = labeller(
+      scenario = c(a = "Scenario A", b = "Scenario B", c = "Scenario C")
+    )
+  ) +
+  scale_x_reverse() +
+  scale_fill_manual(values = c("#9933FF", "black")) +
+  theme_bw(base_size = plot_font_size) +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.key.size = unit(0.75, "lines"),
+    axis.text.x = element_text(size = plot_font_size),
+    axis.title.x = element_text(size = plot_font_size),
+    axis.text.y = element_text(size = plot_font_size),
+    axis.title.y = element_text(size = plot_font_size),
+    text = element_text(size = plot_font_size),
+    legend.text = element_text(size = plot_font_size),
+    strip.text = element_text(size = plot_font_size)
+  ) +
+  labs(
+    x = "Sampling time (days)",
+    y = "Number of\nsamples collected",
+    fill = "Reported by time of analysis"
+  ) 
+
+sim_eff_pop_traj_plot + 
+  sim_prob_reported_plot + 
+  sim_samp_times_plot + 
+  plot_layout(
+    design = "
+      AAABBB
+      CCCCCC
+    "
+  )
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/sim-set-up-wash-delays-plot.pdf"
+  ),
+  width = 5.25, height = 4.5
+)
+```
+
+
+#### Evaluation of inference for each technique/scenario
+
+```{r get-wash-eval-estimation}
+all_est_evaluation <- eval_sim_inference(
+  eff_pop_estimation_path = eff_pop_estimation_path_a, 
+  eff_pop_traj = eff_pop_traj_a, 
+  ave_window = 7, 
+  simulation_scenario = "Scenario A"
+) |> 
+  bind_rows(
+    eval_sim_inference(
+      eff_pop_estimation_path = eff_pop_estimation_path_b, 
+      eff_pop_traj = eff_pop_traj_b, 
+      ave_window = 7, 
+      simulation_scenario = "Scenario B"
+    )
+  ) |>
+  bind_rows(
+    eval_sim_inference(
+      eff_pop_estimation_path = eff_pop_estimation_path_c, 
+      eff_pop_traj = eff_pop_traj_c, 
+      ave_window = 7, 
+      simulation_scenario = "Scenario C"
+    )
+  ) 
+```
+
+```{r plot-wash-estimation-evaluation}
+plot_main_sim_inference_eval(
+  all_est_evaluation,
+  truncation_time = rd_90percentile,
+  font_size = plot_font_size
+)
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/sim-inference-eval-main-wash-delays-plot.pdf"
+  ), 
+  width = 5.25, height = 5
+)
+
+plot_all_real_time_sim_inference_eval(
+  all_est_evaluation,
+  truncation_time = rd_90percentile
+)
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/simulations-Washington-delays/",
+    "sim-inference-eval-real-time-wash-delays-plot.pdf"
+  ), 
+  width = 6.75, height = 5
+)
+
+plot_all_retrospective_sim_inference_eval(
+  all_est_evaluation,
+  truncation_time = rd_90percentile
+)
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/simulations-Washington-delays/",
+    "sim-inference-eval-retrospective-wash-delays-plot.pdf"
+  ), 
+  width = 6.75, height = 5
+)
+```
+
+```{r write-inference-eval-tables}
+write_eval_table(
+  all_est_evaluation,
+  est_eval_table_path = here(
+    "analysis", "output", "simulations", "washington-delays", "mrd_table.csv"
+  ),
+  eval_metric = "mean_relative_deviation", 
+  ave_window = 7, 
+  truncation_time = rd_90percentile
+)
+
+write_eval_table(
+  all_est_evaluation,
+  est_eval_table_path = here(
+    "analysis", "output", "simulations", "washington-delays", "pc_table.csv"
+  ),
+  eval_metric = "per_coverage", 
+  ave_window = 7, 
+  truncation_time = rd_90percentile
+)
+
+write_eval_table(
+  all_est_evaluation,
+  est_eval_table_path = here(
+    "analysis", "output", "simulations", "washington-delays", "mbw_table.csv"
+  ),
+  eval_metric = "mean_band_width", 
+  ave_window = 7, 
+  truncation_time = rd_90percentile
+)
+```
+
+```{r plot-preferential-sampling-coefficient-estimates}
+plot_pref_samp_coeff_est(c(
+  pref_samp_coeff_estimation_path_a,
+  pref_samp_coeff_estimation_path_b,
+  pref_samp_coeff_estimation_path_c
+))
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/simulations-Washington-delays/",
+    "sim-pref-sample-coeff-estimate-wash-delays-plot.pdf"
+  ), 
+  width = 6.5, height = 5.75
+)
+```
+
+
+### Simulations with Santa Clara Reporting Delays
+#### Preparation
+
+```{r set_up_common_simulation_details}
+#| label: set_up_common_simulation_details
+#| 
+time_zeros <- data.frame(
+  scenario = c("A", "B", "C"),
+  latest_sample_time = c(155, 80, 0)
+)
+
+overall_eff_pop_traj <- function(t, simulation_scenario) {
+  t <- t + time_zeros$latest_sample_time[time_zeros$scenario == simulation_scenario]
+  
+  eff_pop <- rep(NA, length(t))
+  
+  change_point <- 162.687
+  
+  t_more <- t[t >= change_point]
+  t_less <- t[t < change_point]
+  
+  eff_pop[t >= change_point] <- exp((-t_more + 450) / 38) / 21
+  
+  eff_pop[t < change_point] <- -0.000005210909 * t_less^4 + 0.001765818 * t_less^3 - 0.1813455 * t_less^2 + 4.967273 * t_less + 130
+
+  eff_pop
+}
+
+earliest_sample_time <- 300
+
+time_grid_length <- earliest_sample_time + 120 # AKA 3 months from TMRCA until sampling began
+
+pref_sample_beta <- 2
+beta1_prec <- 0.001
+
+# Historic reporting delay information
+
+historic_sc_delays <- read_csv(
+  file = here(
+    "analysis", 
+    "data",
+    "delays-for-simulations",
+    "Santa-Clara-county",
+    "historic-delays.csv"
+  ), 
+  show_col_types = FALSE
+)
+
+historic_delays_function <- phylodyn2::get_reported_prob_fn(
+  historic_reporting_delays = historic_sc_delays$reporting_delay, 
+  time_grid = 0:(max((historic_sc_delays$reporting_delay)) + 1),
+  return_log_rd_fn = FALSE
+)
+
+rd_90percentile <- as.numeric(quantile(reporting_delays$delays, probs = 0.90))
+```
+
+#### Run simulations and plot last sim for each scenario
+
+```{r simulate-scenario-a-initial-outbreak}
+#| label: simulate-scenario-a-initial-outbreak
+
+rerun_scenario_a_simulation <- FALSE
+
+# Simulation details -------------------------------------------------------
+
+scenario_a_name <- "scenario-a-initial-outbreak"
+
+output_path_a <- here(
+  "analysis", "output", "simulations", "santa-clara-delays", scenario_a_name
+)
+
+eff_pop_estimation_path_a <- paste0(output_path_a, "/eff_pop_estimation.csv")
+
+pref_samp_coeff_estimation_path_a <- paste0(output_path_a, "/pref_samp_coeff_estimation.csv")
+
+last_sims_estimation_path_a <- paste0(output_path_a, "/last-sims-estimation.rds")
+
+simed_samp_times_path_a <- paste0(output_path_a, "/simed-sampling-times.csv")
+
+set.seed(1625)
+
+eff_pop_traj_a <- function(t) overall_eff_pop_traj(t, simulation_scenario = "A")
+
+latest_sample_time_a <- time_zeros$latest_sample_time[time_zeros$scenario == "A"]
+earliest_sample_time_a <- earliest_sample_time - latest_sample_time_a
+time_grid_length_a <- time_grid_length - latest_sample_time_a
+
+
+num_samples_a <- 1500
+pref_sample_c_a <- num_samples_a / integrate(
+  phylodyn2::traj_beta, 
+  beta = pref_sample_beta,
+  lower =  0, 
+  upper = earliest_sample_time_a, 
+  traj = eff_pop_traj_a
+)$value
+
+# Run simulation ----------------------------------------------------------
+
+if (rerun_scenario_a_simulation) {
+  
+  num_simulations <- 500
+  
+  if (file.exists(eff_pop_estimation_path_a)) {
+    unlink(eff_pop_estimation_path_a)
+  }
+  
+  if (file.exists(pref_samp_coeff_estimation_path_a)) {
+    unlink(pref_samp_coeff_estimation_path_a)
+  } 
+  
+  if (file.exists(last_sims_estimation_path_a)) {
+    unlink(last_sims_estimation_path_a)
+  } 
+  
+  
+  for (sim_iter in 1:num_simulations) {
+    simed_trees_list_a <- sim_trees_rd_comparisons(
+      eff_pop_traj = eff_pop_traj_a, 
+      rd_fun = historic_delays_function,
+      max_time = earliest_sample_time_a,
+      time_grid_length = time_grid_length_a, 
+      pref_sample_c = pref_sample_c_a, 
+      pref_sample_beta = pref_sample_beta,
+      truncation_time = rd_90percentile
+    )
+    
+    est_list_a <- est_eff_pops(
+      simed_trees_list, 
+      historic_reporting_delay_data = historic_sc_delays$reporting_delay,
+      lengthout = time_grid_length_a,
+      beta1_mean = 0,
+      beta1_prec = beta1_prec
+    )
+    
+    save_eff_pop_est_summary(
+      est_list = est_list_a, 
+      eff_pop_estimation_path = eff_pop_estimation_path_a,
+      sim_iter = sim_iter
+    )
+    
+    save_beta1_est_summary(
+      est_list = est_list_a, 
+      pref_samp_coeff_estimation_path = pref_samp_coeff_estimation_path_a,
+      sim_iter = sim_iter
+    )
+    
+  }
+  
+  save_sampling_times(
+    simed_trees_list_a, 
+    scenario_name = "a",
+    samp_times_path = simed_samp_times_path_a
+  )
+  
+  saveRDS(est_list_a, last_sims_estimation_path_a)
+
+} else {
+  
+  est_list_a <- readRDS(last_sims_estimation_path_a)
+  
+}
+```
+
+```{r produce-plot-scenario-a-comparison}
+# Fix scenario name differences
+plotting_est_list_a <- est_list_a
+names(plotting_est_list_a)[which(names(est_list_a) == "full_nops")] <- "full_no_ps"
+names(plotting_est_list_a)[which(names(est_list_a) == "trunc55_nops")] <- "trunc_no_ps"
+names(plotting_est_list_a)[which(names(est_list_a) == "trunc55_ps")] <- "trunc_ps"
+names(plotting_est_list_a)[which(names(est_list_a) == "obs_nops")] <- "obs_no_ps"
+names(plotting_est_list_a)[which(names(est_list_a) == "obs_ps_rd_as_offset")] <- "obs_ps_rd_offset"
+names(plotting_est_list_a)[which(names(est_list_a) == "obs_ps_rd_as_fn")] <- "obs_ps_rd_covariate"
+
+plot_single_comparisons_main(
+    est_fits = plotting_est_list_a,
+    truncation_time = rd_90percentile,
+    min_x = 99,
+    y_lims = c(0, 125),
+    eff_pop_traj = eff_pop_traj_a
+)
+# Expect warning message about 'fill'. It's because I wanted 'truth' in legend
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/simulations-Santa-Clara-delays/",
+    "sim-scenario-a-sc-rds-inference-main-plot.pdf"
+  ),
+  width = 6.5, height = 4
+)
+
+plot_single_comparisons_supplemental(
+    est_fits = plotting_est_list_a,
+    truncation_time = rd_90percentile,
+    min_x = min(earliest_sample_time_a, max(est_list_a$full_nops$x)),
+    y_lims = c(0, 125),
+    eff_pop_traj = eff_pop_traj_a
+)
+# Expect warning message about 'fill'. It's because I wanted 'truth' in legend
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/simulations-Santa-Clara-delays/",
+    "sim-scenario-a-sc-rds-inference-supplemental-plot.pdf"
+  ),
+  width = 6.5, height = 6
+)
+```
+
+```{r simulate-scenario-b-single-peak}
+#| label: simulate-scenario-b-single-peak
+
+rerun_scenario_b_simulation <- FALSE
+
+# Simulation details -------------------------------------------------------
+
+scenario_b_name <- "scenario-b-single-peak"
+
+output_path_b <- here(
+  "analysis", "output", "simulations", "santa-clara-delays", scenario_b_name
+)
+
+eff_pop_estimation_path_b <- paste0(output_path_b, "/eff_pop_estimation.csv")
+
+pref_samp_coeff_estimation_path_b <- paste0(output_path_b, "/pref_samp_coeff_estimation.csv")
+
+last_sims_estimation_path_b <- paste0(output_path_b, "/last-sims-estimation.rds")
+
+simed_samp_times_path_b <- paste0(output_path_b, "/simed-sampling-times.csv")
+
+set.seed(1626)
+
+eff_pop_traj_b <- function(t) overall_eff_pop_traj(t, simulation_scenario = "B")
+
+latest_sample_time_b <- time_zeros$latest_sample_time[time_zeros$scenario == "B"]
+earliest_sample_time_b <- earliest_sample_time - latest_sample_time_b
+time_grid_length_b <- time_grid_length - latest_sample_time_b
+
+num_samples_b <- 1500
+pref_sample_c_b <- num_samples_b / integrate(
+  phylodyn2::traj_beta, 
+  beta = pref_sample_beta,
+  lower =  0, 
+  upper = earliest_sample_time_b, 
+  traj = eff_pop_traj_b
+)$value
+
+
+# Run simulation ----------------------------------------------------------
+
+if (rerun_scenario_b_simulation) {
+  
+  num_simulations <- 500
+  
+  if (file.exists(eff_pop_estimation_path_b)) {
+    unlink(eff_pop_estimation_path_b)
+  }
+  
+  if (file.exists(pref_samp_coeff_estimation_path_b)) {
+    unlink(pref_samp_coeff_estimation_path_b)
+  } 
+  
+  if (file.exists(last_sims_estimation_path_b)) {
+    unlink(last_sims_estimation_path_b)
+  } 
+  
+  for (sim_iter in 1:num_simulations) {
+    simed_trees_list_b <- sim_trees_rd_comparisons(
+      eff_pop_traj = eff_pop_traj_b, 
+      rd_fun = historic_delays_function,
+      max_time = earliest_sample_time_b,
+      time_grid_length = time_grid_length_b, 
+      pref_sample_c = pref_sample_c_b, 
+      pref_sample_beta = pref_sample_beta,
+      truncation_time = rd_90percentile
+    )
+    
+    est_list_b <- suppressWarnings(est_eff_pops(
+      simed_trees_list_b, 
+      historic_reporting_delay_data = historic_sc_delays$reporting_delay,
+      lengthout = time_grid_length_b,
+      beta1_mean = 0,
+      beta1_prec = beta1_prec
+    ))
+    
+    save_eff_pop_est_summary(
+      est_list = est_list_b, 
+      eff_pop_estimation_path = eff_pop_estimation_path_b,
+      sim_iter = sim_iter
+    )
+    
+    save_beta1_est_summary(
+      est_list = est_list_b, 
+      pref_samp_coeff_estimation_path = pref_samp_coeff_estimation_path_b,
+      sim_iter = sim_iter
+    )
+    
+  }
+  
+  save_sampling_times(
+    simed_trees_list_b, 
+    scenario_name = "b",
+    samp_times_path = simed_samp_times_path_b
+  )
+  
+  saveRDS(est_list_b, last_sims_estimation_path_b)
+
+} else {
+  
+  est_list_b <- readRDS(last_sims_estimation_path_b)
+
+}
+```
+
+```{r produce-plot-scenario-b-comparison}
+# Fix scenario name differences
+plotting_est_list_b <- est_list_b
+names(plotting_est_list_b)[which(names(est_list_b) == "full_nops")] <- "full_no_ps"
+names(plotting_est_list_b)[which(names(est_list_b) == "trunc55_nops")] <- "trunc_no_ps"
+names(plotting_est_list_b)[which(names(est_list_b) == "trunc55_ps")] <- "trunc_ps"
+names(plotting_est_list_b)[which(names(est_list_b) == "obs_nops")] <- "obs_no_ps"
+names(plotting_est_list_b)[which(names(est_list_b) == "obs_ps_rd_as_offset")] <- "obs_ps_rd_offset"
+names(plotting_est_list_b)[which(names(est_list_b) == "obs_ps_rd_as_fn")] <- "obs_ps_rd_covariate"
+
+plot_single_comparisons_main(
+    est_fits = plotting_est_list_b,
+    truncation_time = rd_90percentile,
+    min_x = 99,
+    y_lims = c(0, 150),
+    eff_pop_traj = eff_pop_traj_b
+)
+# Expect warning message about 'fill'. It's because I wanted 'truth' in legend
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/simulations-Santa-Clara-delays/",
+    "sim-scenario-b-sc-rds-inference-main-plot.pdf"
+  ),
+  width = 6.5, height = 4
+)
+
+plot_single_comparisons_supplemental(
+    est_fits = plotting_est_list_b,
+    truncation_time = rd_90percentile,
+    min_x = min(earliest_sample_time_b, max(est_list_b$full_nops$x)),
+    y_lims = c(0, 150),
+    eff_pop_traj = eff_pop_traj_b
+)
+# Expect warning message about 'fill'. It's because I wanted 'truth' in legend
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/simulations-Santa-Clara-delays/",
+    "sim-scenario-b-sc-rds-inference-supplemental-plot.pdf"
+  ),
+  width = 6.5, height = 6
+)
+```
+
+```{r simulate-scenario-c-double-peak}
+#| label: simulate-scenario-c-double-peak
+
+rerun_scenario_c_simulation <- FALSE
+
+# Simulation details -------------------------------------------------------
+
+scenario_c_name <- "scenario-c-double-peak"
+
+output_path_c <- here(
+  "analysis", "output", "simulations", "santa-clara-delays", scenario_c_name
+)
+
+eff_pop_estimation_path_c <- paste0(output_path_c, "/eff_pop_estimation.csv")
+
+pref_samp_coeff_estimation_path_c <- paste0(output_path_c, "/pref_samp_coeff_estimation.csv")
+
+last_sims_estimation_path_c <- paste0(output_path_c, "/last-sims-estimation.rds")
+
+simed_samp_times_path_c <- paste0(output_path_c, "/simed-sampling-times.csv")
+
+set.seed(1627)
+
+eff_pop_traj_c <- function(t) overall_eff_pop_traj(t, simulation_scenario = "C")
+
+earliest_sample_time_c <- earliest_sample_time
+time_grid_length_c <- time_grid_length
+
+num_samples_c <- 1500
+pref_sample_c_c <- num_samples_c / integrate(
+  phylodyn2::traj_beta, 
+  beta = pref_sample_beta,
+  lower =  0, 
+  upper = earliest_sample_time_c, 
+  traj = eff_pop_traj_c
+)$value
+
+# Run simulation ----------------------------------------------------------
+
+if (rerun_scenario_c_simulation) {
+  
+  num_simulations <- 500
+  
+  if (file.exists(eff_pop_estimation_path_c)) {
+    unlink(eff_pop_estimation_path_c)
+  }
+  
+  if (file.exists(pref_samp_coeff_estimation_path_c)) {
+    unlink(pref_samp_coeff_estimation_path_c)
+  } 
+  
+  if (file.exists(last_sims_estimation_path_c)) {
+    unlink(last_sims_estimation_path_c)
+  } 
+  
+  
+  for (sim_iter in 1:num_simulations) {
+    simed_trees_list_c <- sim_trees_rd_comparisons(
+      eff_pop_traj = eff_pop_traj_c, 
+      rd_fun = historic_delays_function,
+      max_time = earliest_sample_time_c,
+      time_grid_length = time_grid_length_c, 
+      pref_sample_c = pref_sample_c_c, 
+      pref_sample_beta = pref_sample_beta,
+      truncation_time = rd_90percentile
+    )
+    
+    est_list_c <- est_eff_pops(
+      simed_trees_list_c, 
+      historic_reporting_delay_data = historic_sc_delays$reporting_delay,
+      lengthout = time_grid_length_c,
+      beta1_mean = 0,
+      beta1_prec = beta1_prec
+    )
+    
+    save_eff_pop_est_summary(
+      est_list = est_list_c, 
+      eff_pop_estimation_path = eff_pop_estimation_path_c,
+      sim_iter = sim_iter
+    )
+    
+    save_beta1_est_summary(
+      est_list = est_list_c, 
+      pref_samp_coeff_estimation_path = pref_samp_coeff_estimation_path_c,
+      sim_iter = sim_iter
+    )
+    
+  }
+  
+  save_sampling_times(
+    simed_trees_list_c, 
+    scenario_name = "c",
+    samp_times_path = simed_samp_times_path_c
+  )
+  
+  saveRDS(est_list_c, last_sims_estimation_path_c)
+  
+} else {
+  
+  est_list_c <- readRDS(last_sims_estimation_path_c)
+  
+}
+```
+
+```{r produce-plot-scenario-c-comparison}
+# Fix scenario name differences
+plotting_est_list_c <- est_list_c
+names(plotting_est_list_c)[which(names(est_list_c) == "full_nops")] <- "full_no_ps"
+names(plotting_est_list_c)[which(names(est_list_c) == "trunc55_nops")] <- "trunc_no_ps"
+names(plotting_est_list_c)[which(names(est_list_c) == "trunc55_ps")] <- "trunc_ps"
+names(plotting_est_list_c)[which(names(est_list_c) == "obs_nops")] <- "obs_no_ps"
+names(plotting_est_list_c)[which(names(est_list_c) == "obs_ps_rd_as_offset")] <- "obs_ps_rd_offset"
+names(plotting_est_list_c)[which(names(est_list_c) == "obs_ps_rd_as_fn")] <- "obs_ps_rd_covariate"
+
+plot_single_comparisons_main(
+    est_fits = plotting_est_list_c,
+    truncation_time = rd_90percentile,
+    min_x = 99,
+    y_lims = c(0, 200),
+    eff_pop_traj = eff_pop_traj_c, 
+    legend_label = "Inference"
+)
+# Expect warning message about 'fill'. It's because I wanted 'truth' in legend
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/simulations-Santa-Clara-delays/",
+    "sim-scenario-c-sc-rds-inference-main-plot.pdf"
+  ),
+  width = 6.5, height = 4
+)
+
+plot_single_comparisons_supplemental(
+    est_fits = plotting_est_list_c,
+    truncation_time = rd_90percentile,
+    min_x = min(earliest_sample_time_c, max(est_list_c$full_nops$x)),
+    y_lims = c(0, 200),
+    eff_pop_traj = eff_pop_traj_c
+)
+# Expect warning message about 'fill'. It's because I wanted 'truth' in legend
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/simulations-Santa-Clara-delays/",
+    "sim-scenario-c-sc-rds-inference-supplemental-plot.pdf"
+  ),
+  width = 6.5, height = 6
+)
+```
+
+```{r plot_simulation_setup}
+sim_prob_reported_plot <- data.frame(
+  t = 0:(max(reporting_delays) + 6)
+) |>
+  mutate(prob_reported = historic_delays_function(t)) |>
+    ggplot(aes(x = t, y = prob_reported)) +
+    geom_line() +
+    theme_bw(base_size = plot_font_size) +
+    labs(
+      x = "Sampling time (days)",
+      y = "Probability of\nbeing reported"
+    ) +
+    scale_x_reverse()
+
+sim_eff_pop_traj_plot <- data.frame(
+  x = 0:time_grid_length, 
+  y = overall_eff_pop_traj(0:time_grid_length, simulation_scenario = "C")
+) |>
+  ggplot(aes(x = x, y = y)) +
+  geom_line() +
+  scale_x_reverse() +
+  geom_vline(
+    data = time_zeros, 
+    aes(xintercept = latest_sample_time),
+    linetype = "dashed", 
+    linewidth = 1
+  ) +
+  geom_vline(
+    xintercept = earliest_sample_time, 
+    color = "black", 
+    linetype = "dotted"
+  ) +
+  labs(
+    x = "Time (days)",
+    y = "Effective\nPopulation Size",
+    color = "Latest Sample\nby Scenario"
+  ) +
+  theme_bw(base_size = plot_font_size) +
+  theme(
+    plot.caption = element_text(hjust = 0)
+    #text = element_text(family = "A")
+  ) +
+  annotate(
+    "text", label = "Earliest\nSample",
+    x = (earliest_sample_time) - 55, y = 125
+  ) +
+  annotate(
+    "text", label = "A",
+    x = time_zeros$latest_sample_time[time_zeros$scenario == "A"] - 15, 
+    y = 170
+  ) +
+  annotate(
+    "text", label = "B",
+    x = time_zeros$latest_sample_time[time_zeros$scenario == "B"] - 15, 
+    y = 170
+  ) +
+  annotate(
+    "text", label = "C",
+    x = time_zeros$latest_sample_time[time_zeros$scenario == "C"] - 15, 
+    y = 170
+  )
+
+sim_samp_times_df <- read_csv(simed_samp_times_path_a, show_col_types = FALSE) |> 
+  bind_rows(
+    read_csv(simed_samp_times_path_b, show_col_types = FALSE)
+  ) |> 
+  bind_rows(
+    read_csv(simed_samp_times_path_c, show_col_types = FALSE)
+  ) |> 
+  mutate(reported = factor(
+    observed, 
+    levels = c("FALSE", "TRUE"),
+    labels = c("False", "True")
+  )) 
+
+sim_samp_times_plot <- sim_samp_times_df |>   
+  ggplot(aes(x = samp_time, fill = reported)) +
+  geom_histogram(binwidth = 3) +
+  facet_wrap(
+    ~ scenario,
+    labeller = labeller(
+      scenario = c(a = "Scenario A", b = "Scenario B", c = "Scenario C")
+    )
+  ) +
+  scale_x_reverse() +
+  scale_fill_manual(values = c("#9933FF", "black")) +
+  theme_bw(base_size = plot_font_size) +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal"
+  ) +
+  labs(
+    x = "Sampling time (days)",
+    y = "Number of\nsamples collected",
+    fill = "Reported"
+  ) 
+
+sim_eff_pop_traj_plot + 
+  sim_prob_reported_plot + 
+  sim_samp_times_plot + 
+  plot_layout(
+    design = "
+      AAABBB
+      CCCCCC
+    "
+  )
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/simulations-Santa-Clara-delays/",
+    "sim-set-up-sc-delays-plot.pdf"
+  ),
+  width = 6.5, height = 4.5
+)
+```
+
+
+#### Evaluation inference for each technique/scenario
+
+```{r get-eval-estimation}
+all_est_evaluation <- eval_sim_inference(
+  eff_pop_estimation_path = eff_pop_estimation_path_a, 
+  eff_pop_traj = eff_pop_traj_a, 
+  ave_window = 7, 
+  simulation_scenario = "Scenario A"
+) |> 
+  bind_rows(
+    eval_sim_inference(
+      eff_pop_estimation_path = eff_pop_estimation_path_b, 
+      eff_pop_traj = eff_pop_traj_b, 
+      ave_window = 7, 
+      simulation_scenario = "Scenario B"
+    )
+  ) |>
+  bind_rows(
+    eval_sim_inference(
+      eff_pop_estimation_path = eff_pop_estimation_path_c, 
+      eff_pop_traj = eff_pop_traj_c, 
+      ave_window = 7, 
+      simulation_scenario = "Scenario C"
+    )
+  ) 
+```
+
+```{r plot-estimation-evaluation-sc-delays}
+plot_all_real_time_sim_inference_eval(
+  all_est_evaluation,
+  truncation_time = rd_90percentile
+)
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/simulations-Santa-Clara-delays/",
+    "sim-inference-eval-real-time-sc-delays-plot.pdf"
+  ), 
+  width = 6.75, height = 5
+)
+
+plot_all_retrospective_sim_inference_eval(
+  all_est_evaluation,
+  truncation_time = rd_90percentile
+)
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/simulations-Santa-Clara-delays/",
+    "sim-inference-eval-retrospective-sc-delays-plot.pdf"
+  ), 
+  width = 6.75, height = 5
+)
+```
+
+```{r write-inference-eval-tables}
+write_eval_table(
+  all_est_evaluation,
+  est_eval_table_path = here(
+    "analysis", "output", "simulations", "santa-clara-delays", "mrd_table.csv"
+  ),
+  eval_metric = "mean_relative_deviation", 
+  ave_window = 7, 
+  truncation_time = rd_90percentile
+)
+
+write_eval_table(
+  all_est_evaluation,
+  est_eval_table_path = here(
+    "analysis", "output", "simulations", "santa-clara-delays", "pc_table.csv"
+  ),
+  eval_metric = "per_coverage", 
+  ave_window = 7, 
+  truncation_time = rd_90percentile
+)
+
+write_eval_table(
+  all_est_evaluation,
+  est_eval_table_path = here(
+    "analysis", "output", "simulations", "santa-clara-delays", "mbw_table.csv"
+  ),
+  eval_metric = "mean_band_width", 
+  ave_window = 7, 
+  truncation_time = rd_90percentile
+)
+
+write_eval_reduced_table(
+  full_table_paths = c(
+    here("analysis", "output", "simulations", "santa-clara-delays", "mrd_table.csv"),
+    here("analysis", "output", "simulations", "santa-clara-delays", "pc_table.csv"),
+    here("analysis", "output", "simulations", "santa-clara-delays", "mbw_table.csv")
+  ),
+  reduced_table_path = here(
+    "analysis", "output", "simulations", "santa-clara-delays", "reduced_table.csv"
+  )
+)
+```
+
+```{r plot-preferential-sampling-coefficient-estimates}
+plot_pref_samp_coeff_est(c(
+  pref_samp_coeff_estimation_path_a,
+  pref_samp_coeff_estimation_path_b,
+  pref_samp_coeff_estimation_path_c
+))
+
+ggsave(
+  paste0(
+    fig_folder, 
+    "/supplemental-materials/simulations-Santa-Clara-delays/",
+    "sim-pref-sample-coeff-sc-delays-plot.pdf"
+  ), 
+  width = 6.5, height = 5.75
+)
+```

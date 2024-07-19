@@ -1,0 +1,466 @@
+---
+title: "Sequence data wrangling and obtaining genealogy for each data scenario"
+format: pdf
+editor: 
+  markdown: 
+    wrap: 72
+execute: 
+  echo: false
+  message: false
+  eval: false
+---
+
+## Outline
+
+In this script we:
+
+- query GISAID (done externally from script) to get the accession IDs for all SARS-CoV-2 sequences that match our query
+- query GISAID (externally) to get the metadata for all SARS-CoV-2 sequences that match our query
+- data wrangle metadata
+- randomly subset the data to get the metadata (including accession IDs) for use in the Washington analysis "full data" scenario
+- subset the data to get the metadata (including accession IDs) for use in the Washington analysis "observed data" and "truncated data" scenarios
+- query GISAID (externally) to get a fasta files for our each data scenario
+- get a max clade credibility tree for each data scenario using BEAUti v1.10.4, BEAST v1.10.4, and TreeAnnotator v1.10.4 (all externally from script)
+
+## Obtain metadata for Washington SARS-CoV-2 sequences in time period 
+
+### Obtain metadata for **all** sequences in time period
+
+:::{.callout-note}
+# External: GISAID query 1
+
+Query GISAID to get csv of all IDs for sequences that match:
+
+- Location: North America / USA / Washington
+- Host: Human
+- Collection: 2021-02-01 to 2021-08-01
+- Additional options selected: Complete, High coverage, Collection date complete
+:::
+
+This should result in a single csv, `ids-all.csv` with 20,760 Accession IDs.
+We want the metadata for all of these sequences so we can examine it and can check if our subset appears representative of all of the samples for the query.
+
+Unfortunately, on GIASAID a max of 10,000 sequence (or sequence metadata) can be downloaded at once.
+We then partition these ids into csv files with less than 10,000 ids per file.
+These sequence csv's are then individually uploaded to GISAID using select function to obtain metadata for those sequences.
+
+```{r parition-washington-sequence-ids-for-GISAID}
+all_wash_ids_og <- read_csv(
+  here(
+    "analysis", 
+    "data", 
+    "Washington-SARS-CoV-2-sequence-files",
+    "step1",
+    "ids-all.csv"
+  ), 
+  show_col_types = FALSE, 
+  col_names = "id"
+)
+
+id_partition <- c(1, 7500, 15000, nrow(all_wash_ids_og))
+
+id_file_paths <- here(
+  "analysis", 
+  "data", 
+  "Washington-SARS-CoV-2-sequence-files",
+  "step1",
+  paste0("ids-partition", 1:3, ".csv")
+)
+
+write_csv(
+  all_wash_ids_og[id_partition[1]:id_partition[2], 1],
+  file = id_file_paths[1],
+  col_names = FALSE
+)
+
+write_csv(
+  all_wash_ids_og[(id_partition[2] + 1):id_partition[3], 1],
+  file = id_file_paths[2],
+  col_names = FALSE
+)
+
+write_csv(
+  all_wash_ids_og[(id_partition[3] + 1):id_partition[4], 1],
+  file = id_file_paths[3],
+  col_names = FALSE
+)
+
+```
+
+:::{.callout-note}
+# GISAID queries 2-4
+
+For each query, upload the csv of accession IDs to GISAID select, and download the tsv of the metadata
+:::
+
+Read in and combine the sequence metadata files to obtain one file with all sequence metadata for all sequences sampled in our time frame.
+Wangle data:
+
+- Clean column names
+- Determine sampling and reporting times
+- Calculate reporting delays and if sequence was reported by time zero
+
+```{r wrangle-washington-sequence-metadata}
+metadata_file_paths <- here(
+  "analysis",
+  "data",
+  "Washington-SARS-CoV-2-sequence-files",
+  "step1",
+  paste0("metadata-partition", 1:3, ".tsv")
+)
+
+wash_meta_og <- read_tsv(metadata_file_paths[1], show_col_types = FALSE) |>
+  full_join(read_tsv(metadata_file_paths[2], show_col_types = FALSE)) |> 
+  full_join(read_tsv(metadata_file_paths[3], show_col_types = FALSE))
+```
+
+### Subset metadata for Washington analysis
+
+Subset Washington metadata to get 500 sequences total.
+A csv file of the accession ID's are needed for the select function on GISAID to retrieve the corresponding sequence data (fasta file).
+
+```{r subset-washington-data}
+set.seed(3467)
+
+wash_meta_subset <- wash_meta_og[sample(nrow(wash_meta_og), size = 500), ]
+
+write_csv(
+  data.frame(wash_meta_subset$accession_id),
+  file = here(
+    "analysis",
+    "data",
+    "Washington-SARS-CoV-2-sequence-files",
+    "step1",
+    "ids-subset.csv"
+  ),
+  col_names = FALSE
+)
+```
+
+Save the metadata for the full data scenario (i.e. the subsetted data we will work with).
+
+```{r }
+wash_time_zero_date <- max(wash_meta_subset$`Collection date`) # Chosen most recent sampling date
+
+wash_earliest_historic_date <- wash_time_zero_date - months(1)
+
+wash_meta_full <- wash_meta_subset |> 
+  janitor::clean_names() |> 
+  rename(
+    sampling_date = collection_date,
+    reporting_date = submission_date
+  ) |> 
+  mutate(reporting_delay = as.numeric(difftime(
+    reporting_date, 
+    sampling_date, 
+    units = "days"
+  ))) |>
+  mutate(sampling_time = as.numeric(difftime(
+    wash_time_zero_date, 
+    sampling_date, 
+    units = "days"
+  ))) %>%
+  mutate(reporting_time = as.numeric(difftime(
+    wash_time_zero_date, 
+    reporting_date, 
+    units = "days"
+  ))) |>
+  mutate(reported = ifelse(reporting_date <= wash_time_zero_date, TRUE, FALSE)) |> 
+  mutate(location_cleaned = str_split_fixed(
+    location, 
+    pattern = "North America / USA / ", 
+    n = 2
+  )[, 2])
+
+write_csv(
+  wash_meta_full,
+  here(
+    "analysis", 
+    "data", 
+    "Washington-SARS-CoV-2-sequence-files",
+    "metadata-full.csv"
+  )
+)
+```
+
+## Save some sample details for analysis
+
+### Get reporting delay function from empirical delays
+
+```{r get-wash-rp-function}
+wash_meta_historic <- wash_meta_full |>
+  filter(reported == TRUE) |> 
+  filter(reporting_date >= wash_earliest_historic_date)
+
+wash_rd_fun <- phylodyn2::get_reported_prob_fn(
+  historic_reporting_delays = wash_meta_historic$reporting_delay, 
+  time_grid = 0:(max((wash_meta_historic$reporting_delay)) + 1),
+  return_log_rd_fn = FALSE
+)
+
+wash_rd_90per <- as.numeric(quantile(
+  wash_meta_historic$reporting_delay, 
+  probs = 0.90
+))
+
+# plot(wash_rd_fun)
+# abline(h = 0.9)
+
+write_csv(
+  select(wash_meta_historic, sampling_date, reporting_date), 
+  file = here(
+    "analysis", 
+    "data", 
+    "washington-historic-delays.csv"
+  )
+)
+
+# Subset observed data
+wash_meta_obs <- wash_meta_full |> 
+  filter(reported == TRUE)
+
+# Subset truncated data
+wash_meta_trunc <- wash_meta_obs |> 
+  filter(sampling_time >= wash_rd_90per)
+```
+
+
+## Prepare fasta files
+
+Now that the metadata has been prepped, the sequences (fasta files) are needed from GISAID.
+
+:::{.callout-note}
+# GISAID query 5
+
+Use the subsetted ID csv file to get the sequences for the "full" data case.
+This will be an unaligned fasta file.
+:::
+
+These sequences will be unaligned and must be aligned once downloaded.
+
+:::{.callout-note}
+# mafft software to align sequences
+
+I used [mafft](https://mafft.cbrc.jp/alignment/software/) to align.
+Enter the following into the command line of Command Prompt for Windows:
+`mafft --thread -1 unaligned.fasta > aligned.fasta`
+:::
+
+Match all sequences to metadata so it can be subsetted for "observed" and "truncated" scenarios.
+```{r match-seq-and-metadata}
+wash_seq_og <- seqinr::read.fasta(
+  file = here(
+    "analysis", 
+    "data", 
+    "Washington-SARS-CoV-2-sequence-files",
+    "sequences-aligned-full.fasta"
+  )
+)
+
+num_seq <- length(wash_seq_og)
+
+wash_seq_df <- data.frame(
+    list_names = names(wash_seq_og),
+    seq = rep(NA, num_seq)
+  )
+
+for(i in 1:num_seq){
+    wash_seq_df$seq[i] <- str_c(wash_seq_og[[i]], collapse = "")
+  }
+
+fasta_data <- str_split_fixed(wash_seq_df$list_names, pattern = "\\|", n = 3)
+colnames(fasta_data) <- c("fasta_details", "Accession.ID", "fasta_date")
+wash_seq_df <- cbind(wash_seq_df, fasta_data)
+```
+
+Filter and save data for "observed" scenario
+```{r prepare-and-save-obs-data-for-BEAST}
+# Use meta to filter which fasta are reported by time zero
+all_seqs_obs <- which(wash_seq_df$Accession.ID %in% wash_meta_obs$accession_id)
+
+# Extract relevant rows
+wash_seq_obs <- wash_seq_og[all_seqs_obs]
+
+# Save reduced fasta
+seqinr::write.fasta(
+  wash_seq_obs,
+  names = names(wash_seq_obs),
+  file.out = here(
+    "analysis", 
+    "data", 
+    "Washington-SARS-CoV-2-sequence-files",
+    "sequences-aligned-obs.fasta"
+  )
+)
+```
+
+Filter and save data for "truncated" scenario
+```{r prepare-and-save-trunc-data-for-BEAST}
+# Use meta to filter which fasta have sampling times past 90th percentile
+all_seqs_trunc <- which(wash_seq_df$Accession.ID %in% wash_meta_trunc$accession_id)
+
+# Extract relevant rows
+wash_seq_trunc <- wash_seq_og[all_seqs_trunc]
+
+# Save reduced fasta
+seqinr::write.fasta(
+  wash_seq_trunc,
+  names = names(wash_seq_trunc),
+  file.out = here(
+    "analysis", 
+    "data", 
+    "Washington-SARS-CoV-2-sequence-files",
+    "sequences-aligned-trunc.fasta"
+  )
+)
+```
+
+
+## Obtain genealogy
+
+### Save BEAST modeling details for reproducibility
+
+For Bayesian Skygrid's time to last transition I used: (with Dec 15, 2019 as approximate first case).
+*Looking back this should be when we think it was first introduced to the population we are studying, i.e. the state of Washington, so sometime in Jan 2020 would have been more appropriate.*
+
+```{r compute-tree-lengths}
+tree_lengths <- data.frame(
+  scenario = c("full", "obs", "trunc"),
+  length = c(
+    as.numeric(difftime(
+      max(wash_meta_full$sampling_date), 
+      as_date("2019-12-15"), 
+      units = "days"
+    )) / 365,
+    as.numeric(difftime(
+      max(wash_meta_obs$sampling_date), 
+      as_date("2019-12-15"), 
+      units = "days"
+    )) / 365,
+    as.numeric(difftime(
+      max(wash_meta_trunc$sampling_date), 
+      as_date("2019-12-15"), 
+      units = "days"
+    )) / 365
+  )
+)
+```
+
+Write BEAST modeling details in Supplemental Materials.
+
+```{r prepare-beast-details-table}
+### TODO: update this with truncated seed!
+
+beast_tbl_og <- data.frame(
+  Scenario = c("Full", "Observed", "Truncated"),
+  Data = c(
+    paste0(
+      "Sampled before ", wash_time_zero_date, ", inclusive"
+    ),
+    paste0(
+      "Reported before ", wash_time_zero_date, ", inclusive"
+      ),
+    paste0(
+      "Sampled before ", wash_time_zero_date - lubridate::days(wash_rd_90per), ", inclusive"
+    )
+  ), 
+  Substitution = rep("HKY", 3),
+  Clock_type = rep("strict", 3),
+  Coalescent = rep("Bayesian Skygrid", 3),
+  Num_parameters = rep(50, 3),
+  time_transition = c(
+    paste0(round(tree_lengths$length[tree_lengths$scenario == "full"], digits = 2), " years"),
+    paste0(round(tree_lengths$length[tree_lengths$scenario == "trunc"], digits = 2), " years"), 
+    paste0(round(tree_lengths$length[tree_lengths$scenario == "obs"], digits = 2), " years")
+  ),
+  kappa = rep("LogNormal(1, 1.25)", 3),
+  frequencies = rep("Dirichlet(1, 1)", 3), 
+  clock_rate = rep("Unif(3e-4, 1.1e-3)", 3),
+  root_height = rep("None (tree prior only)", 3),
+  skygrid.precision = rep("Gamma(0.001, 1000)", 3),
+  chain_length = c(20E6, 20E6, 20E6),
+  burn_in = c(2.5E6, 2.5E6, 2.5E6),
+  log_every = rep(2000, 3),
+  seed = c("-", "-", "-")
+) 
+
+beast_tbl <- data.table::transpose(beast_tbl_og)
+colnames(beast_tbl) <- beast_tbl_og$Scenario
+
+beast_tbl$row_names <- c(
+  "Scenario", "Data",
+  "Substitution", "Clock type", "Coalescent", "# of parameters", "Last transition",
+  "Kappa", "Frequencies", "Clock rate", "Root height", "Skygrid precision",
+  "Chain length", "Burn in", "Log every", "Seed"
+)
+
+write_csv(beast_tbl[-1, ], here("analysis", "output", "washington-analysis", "beast-table.csv"))
+```
+
+### Save sample details
+
+Save some details about each sample (full, observed, and truncated) for easier reference in manuscript.
+
+```{r save-washington-sample-details}
+wash_sample_details <- data.frame(
+  scenario = c("full", "trunc", "obs", "historic"),
+  number_of_samples = c(
+    nrow(wash_meta_full),
+    nrow(wash_meta_trunc),
+    nrow(wash_meta_obs),
+    nrow(wash_meta_historic)
+  ),
+  min_time = c(
+    min(wash_meta_full$sampling_time),
+    min(wash_meta_trunc$sampling_time), 
+    min(wash_meta_obs$sampling_time),
+    NA
+  ),
+  max_time = c(
+    max(wash_meta_full$sampling_time),
+    max(wash_meta_trunc$sampling_time), 
+    max(wash_meta_obs$sampling_time),
+    NA
+  ),
+  min_date = c(
+    min(wash_meta_full$sampling_date),
+    min(wash_meta_trunc$sampling_date),
+    min(wash_meta_obs$sampling_date),
+    wash_earliest_historic_date
+  ),
+  max_date = c(
+    max(wash_meta_full$sampling_date),
+    max(wash_meta_trunc$sampling_date),
+    max(wash_meta_obs$sampling_date),
+    wash_time_zero_date
+  )
+)
+
+write_csv(
+  left_join(wash_sample_details, tree_lengths, by = "scenario"),
+  here(
+    "analysis", "data", "washington-sample-details.csv"
+  )
+)
+```
+
+### Fit trees
+
+:::{.callout-note}
+# BEAUti software to get xml files
+
+For each data scenario use [BEAUti](https://beast.community/installing) to get an xml file for the model specified in the previous subsection.
+:::
+
+:::{.callout-note}
+# BEAST Software
+
+For each data scenario use [BEAST](https://beast.community/installing) with the xml file to get log and tree files from the output.
+:::
+
+:::{.callout-note}
+# TreeAnnotator Software
+
+For each data scenario use [TreeAnnotator](https://beast.community/installing) with the tree file to get a maximum clade credibility tree.
+We use the maximum clade credibility tree as the "known" genealogy in the phylodynamic inference.
+:::
