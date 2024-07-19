@@ -33,13 +33,6 @@ For 01-full-analysis-from-paper.qmd:
 |                                            most recent month of samples
 |       └── washington-sample-details.csv <- Sample summaries for each data
 |                                            scenario
-|   ├── output
-|       ├── simulations                   
-|           ├── washington-delays         <- Evaluation metrics from sims with
-|                                            Washington state delays
-|           └── santa-clara-delays        <- Evaluation metrics from sims with
-|                                            Santa Clara county delays
-|       └── washington-analysis           <- Output from real data investigation
 │   ├── 00-obtain-genealogies.qmd         <- Code to produce genealogies
 │   ├── 01-full-analysis-from-paper.qmd   <- Code for analysis in manuscript 
 │   ├── my-plotting-functions.R           <- My plot helper functions used in
