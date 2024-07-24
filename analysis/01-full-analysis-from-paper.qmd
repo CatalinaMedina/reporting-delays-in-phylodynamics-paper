@@ -30,17 +30,27 @@ plot_font_size <- 8
 
 Read in reporting probability function and prepare tree and fit objects.
 ```{r prep-data-trees-fits}
-wash_meta_historic <- read_csv(
-  here("analysis", "data", "washington-historic-delays.csv"),
+wash_sample_details <- read_csv(
+  here(
+    "analysis", 
+    "data", 
+    "washington-sample-details.csv"
+  ),
   show_col_types = FALSE
 )
 
-wash_meta_historic <- wash_meta_historic |> 
-  mutate(reporting_delay = as.numeric(difftime(
-    reporting_date, 
-    sampling_date, 
-    units = "days"
-  ))) 
+wash_time_zero_date <- wash_sample_details |> 
+  filter(scenario == "full") |> 
+  pull(max_date)
+
+wash_meta_full <- read_csv(
+  here("analysis", "data", "Washington-dates.csv"),
+  show_col_types = FALSE
+)
+
+wash_meta_historic <- wash_meta_full |>
+  filter(reported == TRUE) |> 
+  filter(reporting_date >= wash_time_zero_date - months(1))
 
 wash_rd_90per <- as.numeric(quantile(
   wash_meta_historic$reporting_delay, 
@@ -65,17 +75,6 @@ write_csv(
   )
 )
 
-wash_sample_details <- read_csv(
-  here(
-    "analysis", 
-    "data", 
-    "washington-sample-details.csv"
-  ),
-  show_col_types = FALSE
-)
-
-wash_time_zero_date <- wash_sample_details$max_date[wash_sample_details$scenario == "full"]
-
 wash_trees <- as.list(rep(NA, 3))
 names(wash_trees) <- c("full", "trunc", "obs")
 
@@ -89,21 +88,8 @@ names(wash_fits) <- c(
 ```
 
 Produce plot of Washington COVID data.
-This requires you have the metadata for the SARS-CoV-2 sequences used in this analysis.
-Visit the data README for the accession ID's to provide for your GISAID query to get this metadata.
+
 ```{r produce-wash-data-trio-plot}
-#| eval: false
-
-wash_meta_full <- read_csv(
-  here(
-    "analysis", 
-    "data", 
-    "Washignton-SARS-CoV-2-sequence-files",
-    "metadata-full.csv"
-  ),
-  show_col_types = FALSE
-)
-
 wash_meta_obs <- wash_meta_full |> 
   filter(reported == TRUE)
 
@@ -157,7 +143,10 @@ wash_case_plot <- all_cases |>
       axis.text.x = element_text(size = plot_font_size, angle = 45, hjust = 1),
       axis.title.x = element_text(size = plot_font_size),
       axis.text.y = element_text(size = plot_font_size),
-      axis.title.y = element_text(size = plot_font_size, margin = margin(l = 0, r = 0)),
+      axis.title.y = element_text(
+        size = plot_font_size, 
+        margin = margin(l = 0, r = 0)
+      ),
       text = element_text(size = plot_font_size),
       legend.text = element_text(size = plot_font_size),
       strip.text.x = element_blank()
@@ -297,30 +286,36 @@ wash_fits$obs_ps <- correct_BNPR_time_zero_offset(
 
 set.seed(1520)
 # PS with rd correction
-wash_fits$obs_ps_rd_offset <- phylodyn2::BNPR_PS_with_RD(
-  wash_trees$obs, 
-  lengthout = tree_lengths$grid_lengths[tree_lengths$scenario == "obs"],
-  historic_reporting_delays = wash_meta_historic$reporting_delay / 365.25,
-  rd_as_offset = TRUE,
-  time0_offset_from_sim_rd = wash_sample_details$min_time[wash_sample_details$scenario == "obs"] / 365.25,
-  beta1_mean = beta1_mean, 
-  beta1_prec = beta1_prec
+wash_fits$obs_ps_rd_offset <- correct_BNPR_time_zero_offset(
+  phylodyn2::BNPR_PS_with_RD(
+    wash_trees$obs, 
+    lengthout = tree_lengths$grid_lengths[tree_lengths$scenario == "obs"],
+    historic_reporting_delays = wash_meta_historic$reporting_delay / 365.25,
+    rd_as_offset = TRUE,
+    time_offset = wash_sample_details$min_time[wash_sample_details$scenario == "obs"] / 365.25,
+    beta1_mean = beta1_mean, 
+    beta1_prec = beta1_prec
+  ),
+  time0_offset = wash_sample_details$min_time[wash_sample_details$scenario == "obs"] / 365.25
 )
 
 set.seed(1520)
-wash_fits$obs_ps_rd_covariate <-  phylodyn2::BNPR_PS_with_RD(
-  wash_trees$obs, 
-  lengthout = tree_lengths$grid_lengths[tree_lengths$scenario == "obs"],
-  historic_reporting_delays = wash_meta_historic$reporting_delay / 365.25,
-  rd_as_offset = FALSE,
-  time0_offset_from_sim_rd = wash_sample_details$min_time[wash_sample_details$scenario == "obs"] / 365.25,
-  beta1_mean = beta1_mean, 
-  beta1_prec = beta1_prec
+wash_fits$obs_ps_rd_covariate <-  correct_BNPR_time_zero_offset(
+  phylodyn2::BNPR_PS_with_RD(
+    wash_trees$obs, 
+    lengthout = tree_lengths$grid_lengths[tree_lengths$scenario == "obs"],
+    historic_reporting_delays = wash_meta_historic$reporting_delay / 365.25,
+    rd_as_offset = FALSE,
+    time_offset = wash_sample_details$min_time[wash_sample_details$scenario == "obs"] / 365.25,
+    beta1_mean = beta1_mean, 
+    beta1_prec = beta1_prec
+  ),
+  time0_offset = wash_sample_details$min_time[wash_sample_details$scenario == "obs"] / 365.25
 )
 ```
 
 Plot results
-```{r produce-real-inference-comparison-plots}
+```{r produce-wash-real-inference-comparison-plots}
 # Plot for main manuscript to compare models of interest
 plot_single_comparisons_main(
     est_fits = wash_fits,
@@ -362,7 +357,7 @@ ggsave(
 ```
 
 Save preferential sampling coefficients
-```{r save-pref-samp-coefficient-estimates}
+```{r save-wash-pref-samp-coefficient-estimates}
 write_csv(
   bind_rows(
     wash_fits$full_ps$beta1summ, 
@@ -386,7 +381,7 @@ write_csv(
 ### Simulations with Washington Reporting Delays
 #### Preparation
 
-```{r set_up_common_simulation_details_w}
+```{r set-up-common-simulation-details-wash}
 time_zeros <- data.frame(
   scenario = c("A", "B", "C"),
   latest_sample_time = c(155, 80, 0)
@@ -442,7 +437,7 @@ rd_90percentile <- as.numeric(quantile(
 
 #### Run simulations and plot last sim for each scenario
 
-```{r simulate-scenario-a-initial-outbreak}
+```{r simulate-scenario-a-initial-outbreak-wash}
 #| label: simulate-scenario-a-initial-outbreak
 
 rerun_scenario_a_simulation <- FALSE
@@ -548,7 +543,7 @@ if (rerun_scenario_a_simulation) {
 }
 ```
 
-```{r produce-plot-scenario-a-comparison}
+```{r produce-plot-scenario-a-comparison-wash}
 # Fix scenario name differences
 plotting_est_list_a <- est_list_a
 names(plotting_est_list_a)[which(names(est_list_a) == "full_nops")] <- "full_no_ps"
@@ -596,7 +591,7 @@ ggsave(
 )
 ```
 
-```{r simulate-scenario-b-single-peak}
+```{r simulate-scenario-b-single-peak-wash}
 #| label: simulate-scenario-b-single-peak
 
 rerun_scenario_b_simulation <- FALSE
@@ -701,7 +696,7 @@ if (rerun_scenario_b_simulation) {
 }
 ```
 
-```{r produce-plot-scenario-b-comparison}
+```{r produce-plot-scenario-b-comparison-wash}
 # Fix scenario name differences
 plotting_est_list_b <- est_list_b
 names(plotting_est_list_b)[which(names(est_list_b) == "full_nops")] <- "full_no_ps"
@@ -749,7 +744,7 @@ ggsave(
 )
 ```
 
-```{r simulate-scenario-c-double-peak}
+```{r simulate-scenario-c-double-peak-wash}
 #| label: simulate-scenario-c-double-peak
 
 rerun_scenario_c_simulation <- FALSE
@@ -853,7 +848,7 @@ if (rerun_scenario_c_simulation) {
 }
 ```
 
-```{r produce-plot-scenario-c-comparison}
+```{r produce-plot-scenario-c-comparison-wash}
 # Fix scenario name differences
 plotting_est_list_c <- est_list_c
 names(plotting_est_list_c)[which(names(est_list_c) == "full_nops")] <- "full_no_ps"
@@ -901,7 +896,7 @@ ggsave(
 )
 ```
 
-```{r plot_simulation_setup}
+```{r plot_simulation_setup-wash}
 sim_prob_reported_plot <- data.frame(
   t = 0:(max(wash_meta_historic$reporting_delay) + 6)
 ) |>
@@ -1113,7 +1108,7 @@ ggsave(
 )
 ```
 
-```{r write-inference-eval-tables}
+```{r write-wash-inference-eval-tables}
 write_eval_table(
   all_est_evaluation,
   est_eval_table_path = here(
@@ -1145,7 +1140,7 @@ write_eval_table(
 )
 ```
 
-```{r plot-preferential-sampling-coefficient-estimates}
+```{r plot-wash-preferential-sampling-coefficient-estimates}
 plot_pref_samp_coeff_est(c(
   pref_samp_coeff_estimation_path_a,
   pref_samp_coeff_estimation_path_b,
@@ -1166,9 +1161,7 @@ ggsave(
 ### Simulations with Santa Clara Reporting Delays
 #### Preparation
 
-```{r set_up_common_simulation_details}
-#| label: set_up_common_simulation_details
-#| 
+```{r set-up-common-simulation-details-sc}
 time_zeros <- data.frame(
   scenario = c("A", "B", "C"),
   latest_sample_time = c(155, 80, 0)
@@ -1222,9 +1215,7 @@ rd_90percentile <- as.numeric(quantile(reporting_delays$delays, probs = 0.90))
 
 #### Run simulations and plot last sim for each scenario
 
-```{r simulate-scenario-a-initial-outbreak}
-#| label: simulate-scenario-a-initial-outbreak
-
+```{r simulate-scenario-a-initial-outbreak-sc}
 rerun_scenario_a_simulation <- FALSE
 
 # Simulation details -------------------------------------------------------
@@ -1328,7 +1319,7 @@ if (rerun_scenario_a_simulation) {
 }
 ```
 
-```{r produce-plot-scenario-a-comparison}
+```{r produce-plot-scenario-a-comparison-sc}
 # Fix scenario name differences
 plotting_est_list_a <- est_list_a
 names(plotting_est_list_a)[which(names(est_list_a) == "full_nops")] <- "full_no_ps"
@@ -1375,9 +1366,7 @@ ggsave(
 )
 ```
 
-```{r simulate-scenario-b-single-peak}
-#| label: simulate-scenario-b-single-peak
-
+```{r simulate-scenario-b-single-peak-sc}
 rerun_scenario_b_simulation <- FALSE
 
 # Simulation details -------------------------------------------------------
@@ -1480,7 +1469,7 @@ if (rerun_scenario_b_simulation) {
 }
 ```
 
-```{r produce-plot-scenario-b-comparison}
+```{r produce-plot-scenario-b-comparison-sc}
 # Fix scenario name differences
 plotting_est_list_b <- est_list_b
 names(plotting_est_list_b)[which(names(est_list_b) == "full_nops")] <- "full_no_ps"
@@ -1527,9 +1516,7 @@ ggsave(
 )
 ```
 
-```{r simulate-scenario-c-double-peak}
-#| label: simulate-scenario-c-double-peak
-
+```{r simulate-scenario-c-double-peak-sc}
 rerun_scenario_c_simulation <- FALSE
 
 # Simulation details -------------------------------------------------------
@@ -1631,7 +1618,7 @@ if (rerun_scenario_c_simulation) {
 }
 ```
 
-```{r produce-plot-scenario-c-comparison}
+```{r produce-plot-scenario-c-comparison-sc}
 # Fix scenario name differences
 plotting_est_list_c <- est_list_c
 names(plotting_est_list_c)[which(names(est_list_c) == "full_nops")] <- "full_no_ps"
@@ -1679,7 +1666,7 @@ ggsave(
 )
 ```
 
-```{r plot_simulation_setup}
+```{r plot-simulation-setup-sc}
 sim_prob_reported_plot <- data.frame(
   t = 0:(max(reporting_delays) + 6)
 ) |>
@@ -1799,7 +1786,7 @@ ggsave(
 
 #### Evaluation inference for each technique/scenario
 
-```{r get-eval-estimation}
+```{r get-eval-estimation-sc}
 all_est_evaluation <- eval_sim_inference(
   eff_pop_estimation_path = eff_pop_estimation_path_a, 
   eff_pop_traj = eff_pop_traj_a, 
@@ -1852,7 +1839,7 @@ ggsave(
 )
 ```
 
-```{r write-inference-eval-tables}
+```{r write-inference-eval-tables-sc}
 write_eval_table(
   all_est_evaluation,
   est_eval_table_path = here(
@@ -1895,7 +1882,7 @@ write_eval_reduced_table(
 )
 ```
 
-```{r plot-preferential-sampling-coefficient-estimates}
+```{r plot-preferential-sampling-coefficient-estimates-sc}
 plot_pref_samp_coeff_est(c(
   pref_samp_coeff_estimation_path_a,
   pref_samp_coeff_estimation_path_b,

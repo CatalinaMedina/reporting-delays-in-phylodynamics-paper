@@ -160,26 +160,11 @@ wash_meta_full <- wash_meta_subset |>
     sampling_date, 
     units = "days"
   ))) %>%
-  mutate(reporting_time = as.numeric(difftime(
-    wash_time_zero_date, 
-    reporting_date, 
-    units = "days"
-  ))) |>
-  mutate(reported = ifelse(reporting_date <= wash_time_zero_date, TRUE, FALSE)) |> 
-  mutate(location_cleaned = str_split_fixed(
-    location, 
-    pattern = "North America / USA / ", 
-    n = 2
-  )[, 2])
+  mutate(reported = ifelse(reporting_date <= wash_time_zero_date, TRUE, FALSE))
 
 write_csv(
-  wash_meta_full,
-  here(
-    "analysis", 
-    "data", 
-    "Washington-SARS-CoV-2-sequence-files",
-    "metadata-full.csv"
-  )
+  select(wash_meta_full, sampling_date, reporting_date, reported, reporting_delay),
+  file = here("analysis", "data", "Washington-dates.csv")
 )
 ```
 
@@ -205,15 +190,6 @@ wash_rd_90per <- as.numeric(quantile(
 
 # plot(wash_rd_fun)
 # abline(h = 0.9)
-
-write_csv(
-  select(wash_meta_historic, sampling_date, reporting_date), 
-  file = here(
-    "analysis", 
-    "data", 
-    "washington-historic-delays.csv"
-  )
-)
 
 # Subset observed data
 wash_meta_obs <- wash_meta_full |> 

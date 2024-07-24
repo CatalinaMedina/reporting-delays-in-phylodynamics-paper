@@ -29,8 +29,7 @@ For 01-full-analysis-from-paper.qmd:
 |                                            used in Washington analysis
 |       ├── us-states-covid-ny-times.csv  <- covid case data used to compare
 |                                            results from Washington analysis
-|       ├── washington-historic-delays.csv<- sampling and reporting dates for 
-|                                            most recent month of samples
+|       ├── washington-dates.csv          <- sampling and reporting dates
 |       └── washington-sample-details.csv <- Sample summaries for each data
 |                                            scenario
 │   ├── 00-obtain-genealogies.qmd         <- Code to produce genealogies
