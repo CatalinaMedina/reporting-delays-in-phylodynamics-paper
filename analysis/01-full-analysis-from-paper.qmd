@@ -11,17 +11,17 @@ execute:
 ## Setup
 
 ```{r load-packages-and-functions}
-
 library(tidyverse)
 library(here)
 library(patchwork)
+library(survival) # Used in supplemental simulation section
 
 source(here("analysis", "simulation-functions.R"))
 source(here("analysis", "my-plotting-functions.R"))
 ```
 
 ```{r set-current-figures-folder-location}
-fig_folder <- here("manuscript", "2024-02-10-ploscompbiol", "figures")
+fig_folder <- here("manuscript", "2024-07-23-ploscompbiol", "figures")
 
 plot_font_size <- 8
 ```
@@ -29,6 +29,9 @@ plot_font_size <- 8
 ## Washington phylodynamic analysis
 
 Read in reporting probability function and prepare tree and fit objects.
+**Note** that the reporting probability function we obtain here and use for the Washington real data investigation and the main simulations is the empirical cdf of the reporting delays for the past month of *reported sequences used to fit the tree*. 
+We did not use all available observed sequences to fit the tree due to computation feasability, but we should have used the reporting delays for the past month of *all reported sequences available* to get a more accurate picture of the reporting delay behavior.
+We investigated and there are only minor differences in the reporting probability functions obtained from the two methods, so inference could be improved, but is still useful as is.
 ```{r prep-data-trees-fits}
 wash_sample_details <- read_csv(
   here(
@@ -96,8 +99,8 @@ wash_meta_obs <- wash_meta_full |>
 wash_num_samples_plot <- wash_meta_full |> 
   mutate(reported = factor(
     reported, 
-    levels = c("FALSE", "TRUE"),
-    labels = c("Not reported", "Reported")
+    levels = c("TRUE", "FALSE"),
+    labels = c("Sequence Reported by August 1st", "Sequence Not Reported by August 1st")
   )) |> 
   ggplot(aes(x = sampling_date, fill = reported)) +
   geom_bar(position = "stack") +
@@ -115,13 +118,13 @@ wash_num_samples_plot <- wash_meta_full |>
   labs(
     x = "Date",
     y = "Daily number\nof genetic samples",
-    fill = "Reported by August 1st"
+    fill = ""
   ) +
   scale_x_date(
     date_breaks = "1 months", 
     date_labels = "%Y-%m-%d"  #"%b %d, %Y"
   ) +
-  scale_fill_manual(values = c("#9933FF", "black"))
+  scale_fill_manual(values = c("black", "#9933FF"))
 
 all_cases <- read_csv(
   here("analysis", "data", "us-states-covid-ny-times.csv"),
@@ -381,28 +384,62 @@ write_csv(
 ### Simulations with Washington Reporting Delays
 #### Preparation
 
+The effective population size trajectory is a relatively arbitrary function that I chose to represent an outbreak and a second wave.
+
+```{r effective-population-trajectory}
+exp_shift <- 450
+exp_scale1 <- 38
+exp_scale2 <- 21
+
+change_point <- 162.687
+
+polynomial_constant4 <- -0.000005210909
+polynomial_constant3 <- 0.001765818
+polynomial_constant2 <- -0.1813455
+polynomial_constant1 <- 4.967273
+polynomial_constant0 <- 130
+
+
+overall_eff_pop_traj <- function(
+    t, 
+    simulation_scenario,
+    exp_shift = 450,
+    exp_scale1 = 38,
+    exp_scale2 = 21,
+    change_point = 162.687,
+    polynomial_constant4 = -0.000005210909, 
+    polynomial_constant3 = 0.001765818, 
+    polynomial_constant2 = -0.1813455,
+    polynomial_constant1 = 4.967273,
+    polynomial_constant0 = 130
+  ) {
+  t <- t + time_zeros$latest_sample_time[time_zeros$scenario == simulation_scenario]
+  
+  eff_pop <- rep(NA, length(t))
+  
+  t_more <- t[t >= change_point]
+  t_less <- t[t < change_point]
+  
+  # exponential function for times >= change point
+  eff_pop[t >= change_point] <- exp((-t_more + exp_shift) / exp_scale1) / exp_scale2
+  
+  # Polynomial function for times < change point
+  eff_pop[t < change_point] <- polynomial_constant4 * t_less^4 + 
+    polynomial_constant3 * t_less^3 + 
+    polynomial_constant2 * t_less^2 + 
+    polynomial_constant1 * t_less + 
+    polynomial_constant0
+
+  eff_pop
+}
+```
+
+
 ```{r set-up-common-simulation-details-wash}
 time_zeros <- data.frame(
   scenario = c("A", "B", "C"),
   latest_sample_time = c(155, 80, 0)
 )
-
-overall_eff_pop_traj <- function(t, simulation_scenario) {
-  t <- t + time_zeros$latest_sample_time[time_zeros$scenario == simulation_scenario]
-  
-  eff_pop <- rep(NA, length(t))
-  
-  change_point <- 162.687
-  
-  t_more <- t[t >= change_point]
-  t_less <- t[t < change_point]
-  
-  eff_pop[t >= change_point] <- exp((-t_more + 450) / 38) / 21
-  
-  eff_pop[t < change_point] <- -0.000005210909 * t_less^4 + 0.001765818 * t_less^3 - 0.1813455 * t_less^2 + 4.967273 * t_less + 130
-
-  eff_pop
-}
 
 earliest_sample_time <- 300
 
@@ -900,7 +937,7 @@ ggsave(
 sim_prob_reported_plot <- data.frame(
   t = 0:(max(wash_meta_historic$reporting_delay) + 6)
 ) |>
-  mutate(prob_reported = historic_delays_function(t)) |>
+  mutate(prob_reported = wash_rd_fun(t)) |>
     ggplot(aes(x = t, y = prob_reported)) +
     geom_line() +
     theme_bw(base_size = plot_font_size) +
@@ -913,8 +950,8 @@ sim_prob_reported_plot <- data.frame(
       legend.text = element_text(size = plot_font_size)
     ) +
     labs(
-      x = "Sampling time (days)",
-      y = "Probability of\nbeing reported"
+      x = "Sampling Time (days)",
+      y = "Probability of Sequence\nBeing Reported"
     ) +
     scale_x_reverse()
 
@@ -985,8 +1022,8 @@ sim_samp_times_df <- read_csv(simed_samp_times_path_a, show_col_types = FALSE) |
   ) |> 
   mutate(reported = factor(
     observed, 
-    levels = c("FALSE", "TRUE"),
-    labels = c("Not reported", "Reported")
+    levels = c("TRUE", "FALSE"),
+    labels = c("Sequence Reported by Time of Analysis", "Sequence Not Reported by Time of Analysis")
   )) 
 
 sim_samp_times_plot <- sim_samp_times_df |>   
@@ -999,7 +1036,7 @@ sim_samp_times_plot <- sim_samp_times_df |>
     )
   ) +
   scale_x_reverse() +
-  scale_fill_manual(values = c("#9933FF", "black")) +
+  scale_fill_manual(values = c("black", "#9933FF")) +
   theme_bw(base_size = plot_font_size) +
   theme(
     legend.position = "bottom",
@@ -1014,9 +1051,9 @@ sim_samp_times_plot <- sim_samp_times_df |>
     strip.text = element_text(size = plot_font_size)
   ) +
   labs(
-    x = "Sampling time (days)",
-    y = "Number of\nsamples collected",
-    fill = "Reported by time of analysis"
+    x = "Sampling Time (days)",
+    y = "Number of\nSamples Collected",
+    fill = ""
   ) 
 
 sim_eff_pop_traj_plot + 
@@ -1157,8 +1194,1540 @@ ggsave(
 )
 ```
 
+## Supplemental Investigations
 
-### Simulations with Santa Clara Reporting Delays
+### Sensitivity Analysis: Different Ways to Solve for Reporting Delay Probabilities
+
+#### Different historic data options
+
+Here we again consider the Washington real data investigation, but compare different options to calculate the reporting probabilities.
+
+We begin by reading in specified time zero and the metadata for all sequences sampled in the study time period.
+```{r}
+wash_sample_details <- read_csv(
+  here(
+    "analysis", 
+    "data", 
+    "washington-sample-details.csv"
+  ),
+  show_col_types = FALSE
+)
+
+wash_time_zero_date <- wash_sample_details |> 
+  filter(scenario == "full") |> 
+  pull(max_date)
+
+# Read in metadata for all sequences
+metadata_folder <- here(
+  "analysis",
+  "data",
+  "Washington-SARS-CoV-2-sequence-files",
+  "step1"
+)
+
+metadata_df1 <- read_tsv(
+  paste0(metadata_folder, "/metadata-partition1.tsv"),
+  show_col_types = FALSE
+)
+metadata_df2 <- read_tsv(
+  paste0(metadata_folder, "/metadata-partition2.tsv"),
+  show_col_types = FALSE
+)
+metadata_df3 <- read_tsv(
+  paste0(metadata_folder, "/metadata-partition3.tsv"),
+  show_col_types = FALSE
+)
+
+metadata_all <- metadata_df1 |> 
+  bind_rows(metadata_df2) |> 
+  bind_rows(metadata_df3) |> 
+  janitor::clean_names() |> 
+  rename(
+    sampling_date = collection_date,
+    reporting_date = submission_date
+  ) |> 
+  mutate(reporting_delay = as.numeric(difftime(
+    reporting_date, 
+    sampling_date, 
+    units = "days"
+  ))) |>
+  mutate(sampling_time = as.numeric(difftime(
+    wash_time_zero_date, 
+    sampling_date, 
+    units = "days"
+  ))) %>%
+  mutate(reported = ifelse(reporting_date <= wash_time_zero_date, TRUE, FALSE)) 
+```
+
+Different reporting probability functions
+
+```{r}
+historic_time_range_a <- months(1)
+
+historic_time_range_b <- months(3)
+
+historic_data <- NULL
+
+reporting_prob_funs <- NULL
+
+# Data: all observed sequences (real-time)
+# Historic Data: last 1 month of reported sequences
+historic_data$all_obs_reported_a <- metadata_all |> 
+  filter(reported == TRUE) |> 
+  filter(reporting_date >= wash_time_zero_date - historic_time_range_a)
+
+reporting_prob_funs$all_obs_reported_a <- phylodyn2::get_reported_prob_fn(
+  historic_reporting_delays = historic_data$all_obs_reported_a$reporting_delay, 
+  time_grid = 0:(max((historic_data$all_obs_reported_a$reporting_delay)) + 1),
+  return_log_rd_fn = FALSE
+)
+
+# Historic Data: last 3 months of reported sequences
+historic_data$all_obs_reported_b <- metadata_all |> 
+  filter(reported == TRUE) |> 
+  filter(reporting_date >= wash_time_zero_date - historic_time_range_b)
+
+reporting_prob_funs$all_obs_reported_b <- phylodyn2::get_reported_prob_fn(
+  historic_reporting_delays = historic_data$all_obs_reported_b$reporting_delay, 
+  time_grid = 0:(max((historic_data$all_obs_reported_b$reporting_delay)) + 1),
+  return_log_rd_fn = FALSE
+)
+
+# Data: all observed sequences (real-time)
+# Historic Data: last 1 month of sampled sequences
+historic_data$all_obs_sampled_a <- metadata_all |> 
+  filter(reported == TRUE) |> 
+  filter(sampling_date >= wash_time_zero_date - historic_time_range_a)
+
+reporting_prob_funs$all_obs_sampled_a <- phylodyn2::get_reported_prob_fn(
+  historic_reporting_delays = historic_data$all_obs_sampled_a$reporting_delay, 
+  time_grid = 0:(max((historic_data$all_obs_sampled_a$reporting_delay)) + 1),
+  return_log_rd_fn = FALSE
+)
+
+# Historic Data: last 3 months of sampled sequences
+historic_data$all_obs_sampled_b <- metadata_all |> 
+  filter(reported == TRUE) |> 
+  filter(sampling_date >= wash_time_zero_date - historic_time_range_b)
+
+reporting_prob_funs$all_obs_sampled_b <- phylodyn2::get_reported_prob_fn(
+  historic_reporting_delays = historic_data$all_obs_sampled_b$reporting_delay, 
+  time_grid = 0:(max((historic_data$all_obs_sampled_b$reporting_delay)) + 1),
+  return_log_rd_fn = FALSE
+)
+
+# Data: all observed sequences & all sampling times (real-time in some situations)
+# Historic Data: last 1 month of sampled sequences (KM estimate)
+km_time_zero <- as.numeric(difftime(
+    wash_time_zero_date, 
+    wash_time_zero_date - historic_time_range_a,
+    units = "days"
+))
+
+historic_data$km_obs_sampled_a <- metadata_all |> 
+  filter(sampling_date >= wash_time_zero_date - historic_time_range_a) |> 
+  mutate(km_time = ifelse(
+    reported, 
+    yes = reporting_delay,
+    no = as.numeric(difftime(
+      wash_time_zero_date, 
+      sampling_date,
+      units = "days"
+    ))
+  ))|> 
+  mutate(km_reported = ifelse(reporting_date <= wash_time_zero_date, 1, 0))
+
+
+km_fit <- survfit(
+  Surv(km_time, km_reported) ~ 1, 
+  data = historic_data$km_obs_sampled_a
+)
+
+km_df <- data.frame(
+  km_time = km_fit$time,
+  surv_prob = km_fit$surv
+) |>
+  arrange(km_time)
+
+reporting_prob_funs$km_obs_sampled_a <- stepfun(
+  x = km_df$km_time, 
+  y = 1 - c(1, km_df$surv_prob)
+)
+
+# Historic Data: last 3 months of sampled sequences (KM estimate)
+km_time_zero <- as.numeric(difftime(
+    wash_time_zero_date, 
+    wash_time_zero_date - historic_time_range_b,
+    units = "days"
+))
+
+historic_data$km_obs_sampled_b <- metadata_all |> 
+  filter(sampling_date >= wash_time_zero_date - historic_time_range_b) |> 
+  mutate(km_time = ifelse(
+    reported, 
+    yes = reporting_delay,
+    no = as.numeric(difftime(
+      wash_time_zero_date, 
+      sampling_date,
+      units = "days"
+    ))
+  ))|> 
+  mutate(km_reported = ifelse(reporting_date <= wash_time_zero_date, 1, 0))
+
+
+km_fit <- survfit(
+  Surv(km_time, km_reported) ~ 1, 
+  data = historic_data$km_obs_sampled_b
+)
+
+km_df <- data.frame(
+  km_time = km_fit$time,
+  surv_prob = km_fit$surv
+) |>
+  arrange(km_time)
+
+reporting_prob_funs$km_obs_sampled_b <- stepfun(
+  x = km_df$km_time, 
+  y = 1 - c(1, km_df$surv_prob)
+)
+
+# Data: all collected sequences (retrospective)
+# Historic Data: last 1 month of reported sequences
+historic_data$all_sampled_a <- metadata_all |> 
+  filter(sampling_date >= wash_time_zero_date - historic_time_range_a)
+
+reporting_prob_funs$all_sampled_a <- phylodyn2::get_reported_prob_fn(
+  historic_reporting_delays = historic_data$all_sampled_a$reporting_delay, 
+  time_grid = 0:(max((historic_data$all_sampled_a$reporting_delay)) + 1),
+  return_log_rd_fn = FALSE
+)
+
+# Historic Data: last 3 months of reported sequences
+historic_data$all_sampled_b <- metadata_all |> 
+  filter(sampling_date >= wash_time_zero_date - historic_time_range_b)
+
+reporting_prob_funs$all_sampled_b <- phylodyn2::get_reported_prob_fn(
+  historic_reporting_delays = historic_data$all_sampled_b$reporting_delay, 
+  time_grid = 0:(max((historic_data$all_sampled_b$reporting_delay)) + 1),
+  return_log_rd_fn = FALSE
+)
+```
+
+Plot reporting probabilities
+```{r}
+rp_plot_grp <- data.frame(
+  name_breaks = c(
+      "rps_all_obs_reported",
+      "rps_all_obs_sampled",
+      "rps_all_collected_sampled",
+      "rps_km_obs_sampled"
+    ),
+  label = c(
+    "Empirical CDF of Observed Reported Sequences (Real-Time)",
+    "Empirical CDF of Observed Sampled Sequences (Real-Time)",
+    "Empirical CDF of all Sampled Sequences (Retrospective)",
+    "Kaplan Meier Estimate (Real-Time if all Sampling Times are Known)"
+  ),
+  value_color = c(
+    "#31A354", 
+    "darkorange", 
+    "purple",
+    "blue"
+  )
+)
+
+plot_rp_1month <- data.frame(t = 0:100) |> 
+  mutate(rps_all_obs_reported = reporting_prob_funs$all_obs_reported_a(t)) |> 
+  mutate(rps_all_obs_sampled = reporting_prob_funs$all_obs_sampled_a(t)) |> 
+  mutate(rps_all_collected_sampled = reporting_prob_funs$all_sampled_a(t)) |> 
+  mutate(rps_km_obs_sampled = reporting_prob_funs$km_obs_sampled_a(t)) |> 
+  pivot_longer(
+   cols = starts_with("rps_"),
+   names_to = "historic_option",
+   values_to = "reporting_probability"
+  ) |> 
+  ggplot(aes(
+    x = t, 
+    y = reporting_probability, 
+    color = historic_option
+  )) +
+  geom_line() +
+  theme_bw(base_size = plot_font_size) +
+  theme(
+    axis.text.x = element_text(size = plot_font_size),
+    axis.title.x = element_text(size = plot_font_size),
+    axis.text.y = element_text(size = plot_font_size),
+    axis.title.y = element_text(
+      size = plot_font_size, 
+      margin = margin(l = 0, r = 0)
+    ),
+    text = element_text(size = plot_font_size),
+    legend.text = element_text(size = plot_font_size),
+    legend.position = "bottom",
+    legend.direction = "vertical"
+  ) +
+  labs(
+    x = "Sampling Time (days)",
+    y = "Probability of\nBeing Reported",
+    color = "Historic Data Option",
+    title = "Recent 1 Month of Data"
+  ) +
+  scale_x_reverse() +
+  ylim(0, 1) +
+  scale_color_manual(
+    breaks = rp_plot_grp$name_breaks,
+    values = rp_plot_grp$value_color,
+    labels = rp_plot_grp$label
+  ) 
+
+plot_rp_3month <- data.frame(t = 0:100) |> 
+  mutate(rps_all_obs_reported = reporting_prob_funs$all_obs_reported_b(t)) |> 
+  mutate(rps_all_obs_sampled = reporting_prob_funs$all_obs_sampled_b(t)) |> 
+  mutate(rps_all_collected_sampled = reporting_prob_funs$all_sampled_b(t)) |> 
+  mutate(rps_km_obs_sampled = reporting_prob_funs$km_obs_sampled_b(t)) |> 
+  pivot_longer(
+   cols = starts_with("rps_"),
+   names_to = "historic_option",
+   values_to = "reporting_probability"
+  ) |> 
+  ggplot(aes(
+    x = t, 
+    y = reporting_probability, 
+    color = historic_option
+  )) +
+  geom_line() +
+  theme_bw(base_size = plot_font_size) +
+  theme(
+    axis.text.x = element_text(size = plot_font_size),
+    axis.title.x = element_text(size = plot_font_size),
+    axis.text.y = element_text(size = plot_font_size),
+    axis.title.y = element_text(
+      size = plot_font_size, 
+      margin = margin(l = 0, r = 0)
+    ),
+    text = element_text(size = plot_font_size),
+    legend.text = element_text(size = plot_font_size),
+    legend.position = "bottom",
+    legend.direction = "vertical"
+  ) +
+  labs(
+    x = "Sampling Time (days)",
+    y = "",
+    color = "Historic Data Option",
+    title = "Recent 3 Months of Data"
+  ) +
+  scale_x_reverse() +
+  ylim(0, 1) +
+  scale_color_manual(
+    breaks = rp_plot_grp$name_breaks,
+    values = rp_plot_grp$value_color,
+    labels = rp_plot_grp$label
+  )
+
+plot_rp_1month + 
+  plot_rp_3month + 
+  plot_layout(guides = "collect") & theme(legend.position = "bottom")
+
+ggsave(
+  paste0(
+    fig_folder,
+    "/supplemental-materials/investigation-of-reporting-probability-options/",
+    "rp-options-plot.pdf"
+  ),
+  width = 6, height = 5
+)
+```
+
+#### Inference with simulation data - different historic data options
+
+**The previous section "Different historic data options" must be run prior to this section.**
+
+This is the same effective population trajectory used in the simulations and Washington data analysis
+```{r}
+exp_shift <- 450
+exp_scale1 <- 38
+exp_scale2 <- 21
+
+change_point <- 162.687
+
+polynomial_constant4 <- -0.000005210909
+polynomial_constant3 <- 0.001765818
+polynomial_constant2 <- -0.1813455
+polynomial_constant1 <- 4.967273
+polynomial_constant0 <- 130
+
+
+overall_eff_pop_traj <- function(
+    t, 
+    simulation_scenario,
+    exp_shift = 450,
+    exp_scale1 = 38,
+    exp_scale2 = 21,
+    change_point = 162.687,
+    polynomial_constant4 = -0.000005210909, 
+    polynomial_constant3 = 0.001765818, 
+    polynomial_constant2 = -0.1813455,
+    polynomial_constant1 = 4.967273,
+    polynomial_constant0 = 130
+  ) {
+  t <- t + time_zeros$latest_sample_time[time_zeros$scenario == simulation_scenario]
+  
+  eff_pop <- rep(NA, length(t))
+  
+  t_more <- t[t >= change_point]
+  t_less <- t[t < change_point]
+  
+  # exponential function for times >= change point
+  eff_pop[t >= change_point] <- exp((-t_more + exp_shift) / exp_scale1) / exp_scale2
+  
+  # Polynomial function for times < change point
+  eff_pop[t < change_point] <- polynomial_constant4 * t_less^4 + 
+    polynomial_constant3 * t_less^3 + 
+    polynomial_constant2 * t_less^2 + 
+    polynomial_constant1 * t_less + 
+    polynomial_constant0
+
+  eff_pop
+}
+```
+
+Set up common simulation details
+```{r}
+time_zeros <- data.frame(
+  scenario = c("A", "B", "C"),
+  latest_sample_time = c(155, 80, 0)
+)
+
+earliest_sample_time <- 300
+
+time_grid_length <- earliest_sample_time + 120 # AKA 3 months from TMRCA until sampling began
+
+pref_sample_beta_value_truth <- 2
+
+pref_sample_beta_mean_init <- 0
+pref_sample_beta_prec_init <- 0.001
+
+rd_90percentile <- as.numeric(quantile(
+  historic_data$all_obs_reported_subset_a$reporting_delay, 
+  probs = 0.90
+))
+```
+
+Define function to do simulations
+```{r}
+run_sims_investigate_rp <- function(
+    eff_pop_estimation_path,
+    pref_samp_coeff_estimation_path, 
+    last_sims_estimation_path, 
+    simed_samp_times_path,
+    eff_pop_traj_fun,
+    rd_fun_truth,
+    time_grid_length_sim, 
+    earliest_sample_time,
+    pref_sample_c_truth,
+    pref_sample_beta_truth,
+    pref_sample_beta_mean,
+    pref_sample_beta_prec,
+    rd_90per,
+    scenario_letter,
+    num_simulations = NULL
+  ) {
+  
+  if (file.exists(eff_pop_estimation_path)) {
+    unlink(eff_pop_estimation_path)
+  }
+  
+  if (file.exists(pref_samp_coeff_estimation_path)) {
+    unlink(pref_samp_coeff_estimation_path)
+  } 
+  
+  if (file.exists(last_sims_estimation_path)) {
+    unlink(last_sims_estimation_path)
+  } 
+  
+  
+  for (sim_iter in 1:num_simulations) {
+    simed_trees_list <- sim_trees_rd_comparisons(
+      eff_pop_traj = eff_pop_traj_fun, 
+      rd_fun = rd_fun_truth,
+      max_time = earliest_sample_time,
+      time_grid_length = time_grid_length_sim, 
+      pref_sample_c = pref_sample_c_truth, 
+      pref_sample_beta = pref_sample_beta_truth,
+      truncation_time = rd_90per
+    )
+    
+    inference_list <- NULL
+  
+    simed_trees_names <- names(simed_trees_list$trees)
+    trunc_names <- simed_trees_names[str_detect(
+      simed_trees_names, 
+      pattern = "trunc"
+    )]
+    
+    # Full tree
+    inference_list$full_nops <- suppressWarnings(phylodyn2::BNPR(
+      simed_trees_list$trees$full, 
+      lengthout = time_grid_length_sim
+    ))
+    # Warning suppressed because we know we have coincident sampling and coalescent times
+    
+    inference_list$full_ps <- suppressWarnings(phylodyn2::BNPR_PS(
+      simed_trees_list$trees$full, 
+      lengthout = time_grid_length_sim,
+      beta1_mean = pref_sample_beta_mean,
+      beta1_prec = pref_sample_beta_prec
+    ))
+    
+    # Observed tree due to RD
+    inference_list$obs_nops <- correct_BNPR_time_zero_offset(
+      suppressWarnings(phylodyn2::BNPR(
+        simed_trees_list$trees$obs, 
+        lengthout = time_grid_length_sim
+      )), 
+      time0_offset = simed_trees_list$time0_offsets$obs
+    )
+    
+    inference_list$obs_ps <- correct_BNPR_time_zero_offset(
+      suppressWarnings(phylodyn2::BNPR_PS(
+        simed_trees_list$trees$obs, 
+        lengthout = time_grid_length_sim,
+        beta1_mean = pref_sample_beta_mean, 
+        beta1_prec = pref_sample_beta_prec
+      )), 
+      time0_offset = simed_trees_list$time0_offsets$obs
+    )
+    
+    # Observed tree due to RD with RD prob offset in estimation
+    # Historic data: recently observed reported sequences
+    inference_list$obs_ps_rd_obs_reported_a <- correct_BNPR_time_zero_offset(
+      suppressWarnings(phylodyn2::BNPR_PS_with_RD(
+        data = simed_trees_list$trees$obs,
+        rd_as_offset = TRUE, 
+        beta1_mean = pref_sample_beta_mean,
+        beta1_prec = pref_sample_beta_prec,
+        historic_reporting_delays = historic_data$all_obs_reported_a$reporting_delay,
+        lengthout = time_grid_length_sim,
+        time_offset = simed_trees_list$time0_offsets$obs
+      )),
+      time0_offset = simed_trees_list$time0_offsets$obs
+    )
+    
+    inference_list$obs_ps_rd_obs_reported_b <- correct_BNPR_time_zero_offset(
+      suppressWarnings(phylodyn2::BNPR_PS_with_RD(
+        data = simed_trees_list$trees$obs,
+        rd_as_offset = TRUE, 
+        beta1_mean = pref_sample_beta_mean,
+        beta1_prec = pref_sample_beta_prec,
+        historic_reporting_delays = historic_data$all_obs_reported_b$reporting_delay,
+        lengthout = time_grid_length_sim,
+        time_offset = simed_trees_list$time0_offsets$obs
+      )),
+      time0_offset = simed_trees_list$time0_offsets$obs
+    )
+    
+    # Observed tree due to RD with RD prob offset in estimation
+    # Historic data: recently observed sampled sequences
+    inference_list$obs_ps_rd_obs_sampled_a <- correct_BNPR_time_zero_offset(
+      suppressWarnings(phylodyn2::BNPR_PS_with_RD(
+        data = simed_trees_list$trees$obs,
+        rd_as_offset = TRUE, 
+        beta1_mean = pref_sample_beta_mean,
+        beta1_prec = pref_sample_beta_prec,
+        historic_reporting_delays = historic_data$all_obs_sampled_a$reporting_delay,
+        lengthout = time_grid_length_sim,
+        time_offset = simed_trees_list$time0_offsets$obs
+      )),
+      time0_offset = simed_trees_list$time0_offsets$obs
+    )
+    
+    inference_list$obs_ps_rd_obs_sampled_b <- correct_BNPR_time_zero_offset(
+      suppressWarnings(phylodyn2::BNPR_PS_with_RD(
+        data = simed_trees_list$trees$obs,
+        rd_as_offset = TRUE, 
+        beta1_mean = pref_sample_beta_mean,
+        beta1_prec = pref_sample_beta_prec,
+        historic_reporting_delays = historic_data$all_obs_sampled_b$reporting_delay,
+        lengthout = time_grid_length_sim,
+        time_offset = simed_trees_list$time0_offsets$obs
+      )),
+      time0_offset = simed_trees_list$time0_offsets$obs
+    )
+    
+    # Observed tree due to RD with RD prob offset in estimation
+    # Historic data: all recently sampled sequences
+    inference_list$obs_ps_rd_sampled_a <- correct_BNPR_time_zero_offset(
+      suppressWarnings(phylodyn2::BNPR_PS_with_RD(
+        data = simed_trees_list$trees$obs,
+        rd_as_offset = TRUE, 
+        beta1_mean = pref_sample_beta_mean,
+        beta1_prec = pref_sample_beta_prec,
+        historic_reporting_delays = historic_data$all_sampled_a$reporting_delay,
+        lengthout = time_grid_length_sim,
+        time_offset = simed_trees_list$time0_offsets$obs
+      )),
+      time0_offset = simed_trees_list$time0_offsets$obs
+    )
+    
+    inference_list$obs_ps_rd_sampled_b <- correct_BNPR_time_zero_offset(
+      suppressWarnings(phylodyn2::BNPR_PS_with_RD(
+        data = simed_trees_list$trees$obs,
+        rd_as_offset = TRUE, 
+        beta1_mean = pref_sample_beta_mean,
+        beta1_prec = pref_sample_beta_prec,
+        historic_reporting_delays = historic_data$all_sampled_b$reporting_delay,
+        lengthout = time_grid_length_sim,
+        time_offset = simed_trees_list$time0_offsets$obs
+      )),
+      time0_offset = simed_trees_list$time0_offsets$obs
+    )
+    
+    save_eff_pop_est_summary(
+      est_list = inference_list, 
+      eff_pop_estimation_path = eff_pop_estimation_path,
+      sim_iter = sim_iter
+    )
+    
+    save_beta1_est_summary(
+      est_list = inference_list, 
+      pref_samp_coeff_estimation_path = pref_samp_coeff_estimation_path,
+      sim_iter = sim_iter
+    )
+    
+  }
+  
+  save_sampling_times(
+    simed_trees_list, 
+    scenario_name = scenario_letter,
+    samp_times_path = simed_samp_times_path
+  )
+  
+  saveRDS(inference_list, last_sims_estimation_path)
+  
+} 
+```
+
+Simulate scenario A single peak
+```{r}
+rerun_scenario_simulation <- FALSE
+
+# Simulation details -------------------------------------------------------
+
+scenario_a_name <- "scenario-a-initial-outbreak"
+
+output_path_a <- here(
+  "analysis", "output", "simulations", 
+  "washington-delays-rp-function-sensitivity", 
+  scenario_a_name
+)
+
+set.seed(1627)
+
+eff_pop_traj_a <- function(t) overall_eff_pop_traj(t, simulation_scenario = "A")
+
+latest_sample_time_a <- time_zeros$latest_sample_time[time_zeros$scenario == "A"]
+earliest_sample_time_a <- earliest_sample_time - latest_sample_time_a
+time_grid_length_a <- time_grid_length - latest_sample_time_a
+
+
+num_samples_a <- 1500
+pref_sample_c_a <- num_samples_a / integrate(
+  phylodyn2::traj_beta, 
+  beta = pref_sample_beta_value_truth,
+  lower =  0, 
+  upper = earliest_sample_time_a, 
+  traj = eff_pop_traj_a
+)$value
+
+
+# Run simulation ----------------------------------------------------------
+
+if (rerun_scenario_simulation) {
+  run_sims_investigate_rp(
+    eff_pop_estimation_path = paste0(
+      output_path_a, 
+      "/eff_pop_estimation.csv"
+    ),
+    pref_samp_coeff_estimation_path = paste0(
+      output_path_a, 
+      "/pref_samp_coeff_estimation.csv"
+    ), 
+    last_sims_estimation_path = paste0(
+      output_path_a, 
+      "/last-sims-estimation.rds"
+    ), 
+    simed_samp_times_path = paste0(
+      output_path_a, 
+      "/simed-sampling-times.csv"
+    ),
+    eff_pop_traj_fun = eff_pop_traj_a,
+    rd_fun_truth = reporting_prob_funs$all_sampled_a,
+    time_grid_length = time_grid_length_a,
+    earliest_sample_time = earliest_sample_time_a,
+    pref_sample_c_truth = pref_sample_c_a,
+    pref_sample_beta_truth = pref_sample_beta_value_truth,
+    pref_sample_beta_mean = pref_sample_beta_mean_init,
+    pref_sample_beta_prec = pref_sample_beta_prec_init,
+    rd_90per = rd_90percentile,
+    scenario_letter = "a",
+    num_simulations = 500
+  )
+
+}
+
+est_list_a <- readRDS(paste0(
+  output_path_a, 
+  "/last-sims-estimation.rds"
+))
+```
+
+Simulate scenario B single peak
+```{r}
+rerun_scenario_simulation <- FALSE
+
+# Simulation details -------------------------------------------------------
+
+scenario_b_name <- "scenario-b-single-peak"
+
+output_path_b <- here(
+  "analysis", "output", "simulations", 
+  "washington-delays-rp-function-sensitivity", 
+  scenario_b_name
+)
+
+set.seed(1627)
+
+eff_pop_traj_b <- function(t) overall_eff_pop_traj(t, simulation_scenario = "B")
+
+latest_sample_time_b <- time_zeros$latest_sample_time[time_zeros$scenario == "B"]
+
+earliest_sample_time_b <- earliest_sample_time - latest_sample_time_b
+
+time_grid_length_b <- time_grid_length - latest_sample_time_b
+
+num_samples_b <- 1500
+
+pref_sample_c_b <- num_samples_b / integrate(
+  phylodyn2::traj_beta, 
+  beta = pref_sample_beta_value_truth,
+  lower =  0, 
+  upper = earliest_sample_time_b, 
+  traj = eff_pop_traj_b
+)$value
+
+
+# Run simulation ----------------------------------------------------------
+
+if (rerun_scenario_simulation) {
+  run_sims_investigate_rp(
+    eff_pop_estimation_path = paste0(
+      output_path_b, 
+      "/eff_pop_estimation.csv"
+    ),
+    pref_samp_coeff_estimation_path = paste0(
+      output_path_b, 
+      "/pref_samp_coeff_estimation.csv"
+    ), 
+    last_sims_estimation_path = paste0(
+      output_path_b, 
+      "/last-sims-estimation.rds"
+    ), 
+    simed_samp_times_path = paste0(
+      output_path_b, 
+      "/simed-sampling-times.csv"
+    ),
+    eff_pop_traj_fun = eff_pop_traj_b,
+    rd_fun_truth = reporting_prob_funs$all_sampled_a,
+    time_grid_length = time_grid_length_b,
+    earliest_sample_time = earliest_sample_time_b,
+    pref_sample_c_truth = pref_sample_c_b,
+    pref_sample_beta_truth = pref_sample_beta_value_truth,
+    pref_sample_beta_mean = pref_sample_beta_mean_init,
+    pref_sample_beta_prec = pref_sample_beta_prec_init,
+    rd_90per = rd_90percentile,
+    scenario_letter = "b",
+    num_simulations = 500
+  )
+
+}
+
+est_list_b <- readRDS(paste0(
+  output_path_b, 
+  "/last-sims-estimation.rds"
+))
+```
+
+Simulate scenario C double peak
+```{r}
+rerun_scenario_simulation <- FALSE
+
+# Simulation details -------------------------------------------------------
+
+scenario_c_name <- "scenario-c-double-peak"
+
+output_path_c <- here(
+  "analysis", "output", "simulations", 
+  "washington-delays-rp-function-sensitivity", 
+  scenario_c_name
+)
+
+set.seed(1627)
+
+eff_pop_traj_c <- function(t) overall_eff_pop_traj(t, simulation_scenario = "C")
+
+earliest_sample_time_c <- earliest_sample_time
+
+num_samples_c <- 1500
+pref_sample_c_c <- num_samples_c / integrate(
+  phylodyn2::traj_beta, 
+  beta = pref_sample_beta_value_truth,
+  lower =  0, 
+  upper = earliest_sample_time_c, 
+  traj = eff_pop_traj_c
+)$value
+
+
+# Run simulation ----------------------------------------------------------
+
+if (rerun_scenario_simulation) {
+  run_sims_investigate_rp(
+    eff_pop_estimation_path = paste0(
+      output_path_c, 
+      "/eff_pop_estimation.csv"
+    ),
+    pref_samp_coeff_estimation_path = paste0(
+      output_path_c, 
+      "/pref_samp_coeff_estimation.csv"
+    ), 
+    last_sims_estimation_path = paste0(
+      output_path_c, 
+      "/last-sims-estimation.rds"
+    ), 
+    simed_samp_times_path = paste0(
+      output_path_c, 
+      "/simed-sampling-times.csv"
+    ),
+    eff_pop_traj_fun = eff_pop_traj_c,
+    rd_fun_truth = reporting_prob_funs$all_sampled_a,
+    time_grid_length = time_grid_length,
+    earliest_sample_time = earliest_sample_time_c,
+    pref_sample_c_truth = pref_sample_c_c,
+    pref_sample_beta_truth = pref_sample_beta_value_truth,
+    pref_sample_beta_mean = pref_sample_beta_mean_init,
+    pref_sample_beta_prec = pref_sample_beta_prec_init,
+    rd_90per = rd_90percentile,
+    scenario_letter = "c",
+    num_simulations = 500
+  )
+
+}
+
+est_list_c <- readRDS(paste0(
+  output_path_c, 
+  "/last-sims-estimation.rds"
+))
+```
+
+Plot one simulation result for scenario C
+```{r}
+est_list_c_temp <- est_list_c
+est_list_c_temp$obs_no_ps <- est_list_c$obs_ps_rd_sampled_a
+est_list_c_temp$obs_ps <- est_list_c$obs_ps_rd_obs_sampled_a
+est_list_c_temp$obs_ps_rd_offset <- est_list_c$obs_ps_rd_obs_reported_a
+
+grp_manual_specs <- data.frame(
+  name_breaks = c("obs_no_ps", "obs_ps", "obs_ps_rd_offset", "full_ps", "truth"),
+  color_value = c("purple", "darkorange", "darkgreen", "black", "black"),
+  linetype = c("dashed", "dashed", "dashed", "dashed", "solid"),
+  label = c(
+    "All Sampled Sequences",
+    "Observed Sampled Sequences",
+    "Observed Reported Sequences",
+    "Retrospective BNPR PS",
+    "Truth"
+  )
+)
+
+plot_single_comparisons_main(
+  est_fits = est_list_c_temp,
+  truncation_time = rd_90percentile,
+  min_x = 99,
+  y_lims = c(0, 300),
+  legend_label = "Infernce",
+  font_size = plot_font_size, 
+  eff_pop_traj = eff_pop_traj_c,
+  show_facet_labels = FALSE
+) +
+  scale_color_manual(
+    values = grp_manual_specs$color_value,
+    breaks = grp_manual_specs$name_breaks, 
+    labels =grp_manual_specs$label
+  ) +
+  scale_fill_manual(
+    values = grp_manual_specs$color_value,
+    breaks = grp_manual_specs$name_breaks, 
+    labels =grp_manual_specs$label
+  ) +
+  scale_linetype_manual(
+    values = grp_manual_specs$linetype,
+    breaks = grp_manual_specs$name_breaks, 
+    labels = grp_manual_specs$label
+  ) +
+  labs(
+    color = "Historic Data (1 month)",
+    fill = "Historic Data (1 month)",
+    linetype = "Historic Data (1 month)"
+  )
+
+# ggsave(
+#   here("analysis", "temp-rp-figures", "sim-main-1month.png"),
+#   width = 5.25, height = 3.5
+# )
+```
+
+Combine simulation outputs
+```{r}
+all_est_evaluation <- eval_sim_inference(
+  eff_pop_estimation_path = paste0(
+      output_path_a, 
+      "/eff_pop_estimation.csv"
+    ), 
+  eff_pop_traj = eff_pop_traj_a, 
+  ave_window = 7, 
+  simulation_scenario = "Scenario A"
+) |> 
+  bind_rows(
+    eval_sim_inference(
+      eff_pop_estimation_path = paste0(
+      output_path_b, 
+      "/eff_pop_estimation.csv"
+    ), 
+      eff_pop_traj = eff_pop_traj_b, 
+      ave_window = 7, 
+      simulation_scenario = "Scenario B"
+    )
+  ) |>
+  bind_rows(
+    eval_sim_inference(
+      eff_pop_estimation_path = paste0(
+      output_path_c, 
+      "/eff_pop_estimation.csv"
+    ), 
+      eff_pop_traj = eff_pop_traj_c, 
+      ave_window = 7, 
+      simulation_scenario = "Scenario C"
+    )
+  ) 
+```
+
+Plot reporting probabilities
+```{r}
+rp_plot_grp <- data.frame(
+  name_breaks = c(
+      "rps_all_obs_reported",
+      "rps_all_obs_sampled",
+      "rps_all_collected_sampled"
+    ),
+  label = c(
+    'Empirical CDF of Observed Reported Sequences - "Minor Misspecification"',
+    'Empirical CDF of Observed Sampled Sequences - "Major Misspecification"',
+    'Empirical CDF of all Sampled Sequences - "Truth"'
+  ),
+  value_color = c(
+    "#31A354", 
+    "darkorange", 
+    "purple"
+  )
+)
+
+sim_rp_specifications_plot <- data.frame(t = 0:100) |> 
+  mutate(rps_all_obs_reported = reporting_prob_funs$all_obs_reported_a(t)) |> 
+  mutate(rps_all_obs_sampled = reporting_prob_funs$all_obs_sampled_a(t)) |> 
+  mutate(rps_all_collected_sampled = reporting_prob_funs$all_sampled_a(t)) |> 
+  #mutate(rps_km_obs_sampled = reporting_prob_funs$km_obs_sampled_a(t)) |> 
+  pivot_longer(
+   cols = starts_with("rps_"),
+   names_to = "historic_option",
+   values_to = "reporting_probability"
+  ) |> 
+  ggplot(aes(
+    x = t, 
+    y = reporting_probability, 
+    color = historic_option
+  )) +
+  geom_line() +
+  theme_bw(base_size = plot_font_size) +
+  theme(
+    axis.text.x = element_text(size = plot_font_size),
+    axis.title.x = element_text(size = plot_font_size),
+    axis.text.y = element_text(size = plot_font_size),
+    axis.title.y = element_text(
+      size = plot_font_size, 
+      margin = margin(l = 0, r = 0)
+    ),
+    text = element_text(size = plot_font_size),
+    legend.text = element_text(size = plot_font_size),
+    legend.position = "bottom",
+    legend.direction = "vertical"
+  ) +
+  labs(
+    x = "Sampling Time (days)",
+    y = "Probability of\nBeing Reported",
+    color = "Historic Data Option"
+  ) +
+  scale_x_reverse() +
+  ylim(0, 1) +
+  scale_color_manual(
+    breaks = rp_plot_grp$name_breaks,
+    values = rp_plot_grp$value_color,
+    labels = rp_plot_grp$label
+  ) 
+```
+
+Plot evaluations of simulations - "recent" = 1 month only
+```{r}
+evaluation_names_df <- data.frame(
+    level = c(
+      #"mse", 
+      "mean_relative_deviation",
+      "per_coverage", 
+      "mean_band_width"
+    ),
+    label = c(
+      #"Mean Square Error", 
+      "Mean\nRelative Devation",
+      "Mean % \nCoverage by BCI", 
+      "Mean\n95% BCI Width"
+    )
+  )
+  
+  estimation_names_df <- data.frame(
+    level = c(
+      "obs_nops",
+      "obs_ps",
+      "obs_ps_rd_obs_reported_a",
+      "obs_ps_rd_obs_sampled_a",
+      "obs_ps_rd_sampled_a",
+      "obs_ps_rd_obs_reported_b",
+      "obs_ps_rd_obs_sampled_b",
+      "obs_ps_rd_sampled_b"
+    ),
+    label = c(
+      "BNPR",
+      "BNPR PS",
+      "Delay-Aware BNPR PS RP with Minor Reporting Probability Misspecification",
+      "Delay-Aware BNPR PS RP with Major Reporting Probability Misspecification",
+      "Delay-Aware BNRP PS RP with no Reporting Probability Misspecification",
+      "Delay-Aware BNPR PS RP with Minor Reporting Probability Misspecification",
+      "Delay-Aware BNPR PS RP with Major Reporting Probability Misspecification",
+      "Delay-Aware BNRP PS RP with no Reporting Probability misspecification"
+    ),
+    color = c(
+      "blue",
+      "red",
+      "#31A354",
+      "orange",
+      "purple",
+      "#31A354",
+      "orange",
+      "purple"
+    ),
+    shape = c(24, 25, 23, 3, 10, 23, 3, 10)
+    )
+
+  plot_grp_color <- estimation_names_df$color
+  names(plot_grp_color) <- estimation_names_df$label
+  
+  plot_grp_shape <- estimation_names_df$shape
+  names(plot_grp_shape) <- estimation_names_df$label
+    
+  
+  plot_data <- all_est_evaluation |> 
+    filter(!(scenario %in% c("full_nops", "full_ps"))) |> 
+    filter(interval_midpoint != "all") |> 
+    mutate(interval_midpoint = as.numeric(interval_midpoint)) |> 
+    select(-rev_per_coverage) |> 
+    select(-mse) |> 
+    pivot_longer(
+      cols = c(mean_relative_deviation, per_coverage, mean_band_width),
+      names_to = "evaluation",
+      values_to = "value"
+    ) |> 
+    mutate(evaluation = factor(
+      evaluation,
+      levels = evaluation_names_df$level,
+      labels = evaluation_names_df$label
+    )) |> 
+    mutate(
+      historic_time_range = case_when(
+        scenario %in% c(
+        "obs_ps_rd_obs_reported_a",
+        "obs_ps_rd_obs_sampled_a",
+        "obs_ps_rd_sampled_a"
+        ) ~ "1 month",
+        scenario %in% c(
+        "obs_ps_rd_obs_reported_b",
+        "obs_ps_rd_obs_sampled_b",
+        "obs_ps_rd_sampled_b"
+        ) ~ "3 months",
+        TRUE ~ NA
+      )
+    ) |> 
+    mutate(
+      historic_sequences = case_when(
+        scenario %in% c(
+          "obs_ps_rd_obs_reported_a",
+          "obs_ps_rd_obs_reported_b"
+        ) ~ "Observed Reported",
+        scenario %in% c(
+          "obs_ps_rd_obs_sampled_a",
+          "obs_ps_rd_obs_sampled_b"
+        ) ~ "Observed Sampled",
+        scenario %in% c(
+          "obs_ps_rd_sampled_a",
+          "obs_ps_rd_sampled_b"
+        ) ~ "All Sampled",
+        TRUE ~ NA
+      )
+    ) |> 
+    mutate(estimation = factor(
+      scenario,
+      levels = estimation_names_df$level,
+      labels = estimation_names_df$label
+    ))
+  
+  data_hline <- data.frame(
+    evaluation = factor(evaluation_names_df$label), 
+    hline = c(0, 95, NA)
+  )
+  
+  sim_sup_rp_eval_plot <- plot_data |> 
+    filter(interval_midpoint < 100) |> 
+    filter(scenario %in% c(
+      "obs_nops",
+      "obs_ps",
+      "obs_ps_rd_obs_reported_a",
+      "obs_ps_rd_obs_sampled_a",
+      "obs_ps_rd_sampled_a"
+    )) |> 
+    ggplot(aes(
+      x = interval_midpoint, 
+      y = value, 
+      linetype = estimation, 
+      shape = estimation, 
+      fill = estimation, 
+      color = estimation
+    )) +
+    geom_point() +
+    geom_line() +
+    # scale_linetype_manual(values = estimation_names_df$linetype) +
+    scale_shape_manual(values = plot_grp_shape) +
+    scale_fill_manual(values = plot_grp_color) +
+    scale_color_manual(values = plot_grp_color) +
+    facet_grid(evaluation ~ sim_scenario, scales = "free_y", switch = "y") +
+    geom_hline(data = data_hline, aes(yintercept = hline), linetype = "dashed") +
+    annotate(
+      'rect',
+      xmin = rd_90percentile, xmax = Inf,
+      ymin = -Inf, ymax = Inf,
+      fill = '#00000010'
+    ) +
+    theme_bw(base_size = plot_font_size) +
+    theme(
+      strip.background = element_blank(), 
+      strip.placement = "outside",
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_blank(),
+      #text = element_text(family = "A"),
+      plot.margin = unit(c(0, 0.1, 0, 0), "cm"),
+      legend.position = "bottom",
+      legend.direction= "vertical",
+      panel.spacing = unit(0, "cm"),
+      axis.title.x.top = element_text(size = plot_font_size),
+      axis.text.x = element_text(size = plot_font_size),
+      axis.title.x = element_text(size = plot_font_size),
+      axis.text.y = element_text(size = plot_font_size),
+      axis.title.y = element_text(size = plot_font_size, margin = margin(l = 0, r = 0)),
+      text = element_text(size = plot_font_size),
+      legend.text = element_text(size = plot_font_size),
+      strip.text = element_text(size = plot_font_size)
+    ) +
+    scale_x_reverse() +
+    labs(
+      x = "Time Since Most Recently Collected Sample (days)",
+      y = "",
+      linetype = "Inferential Method",
+      shape = "Inferential Method",
+      fill = "Inferential Method",
+      color = "Inferential Method"
+    )
+```
+
+Save combined plot
+```{r}
+sim_rp_specifications_plot + 
+  sim_sup_rp_eval_plot + 
+  plot_layout(nrow = 2, heights = c(1, 3))
+
+ggsave(
+  paste0(
+    fig_folder,
+    "/supplemental-materials/investigation-of-reporting-probability-options/",
+    "Simulation-with-different-rp-options-plot.pdf"
+  ),
+  width = 6, height = 8
+)
+```
+
+
+#### Inference with Washington data - different historic data options
+
+**The previous section "Different historic data options" must be run prior to this section.**
+
+Read metadata for subset of used sequences and read in trees
+```{r}
+wash_meta_full <- read_csv(
+  here("analysis", "data", "Washington-dates.csv"),
+  show_col_types = FALSE
+)
+
+historic_data$all_obs_reported_subset_a <- wash_meta_full |>
+  filter(reported == TRUE) |> 
+  filter(reporting_date >= wash_time_zero_date - historic_time_range_a)
+
+historic_data$all_obs_reported_subset_b<- wash_meta_full |>
+  filter(reported == TRUE) |> 
+  filter(reporting_date >= wash_time_zero_date - historic_time_range_b)
+
+wash_trees_sup <- NULL
+
+wash_trees_sup$full <- ape::read.nexus(here(
+  "analysis", 
+  "data", 
+  "washington-genealogies", 
+  "covid-washington-full-max-clade-cred.trees.txt"
+))
+
+wash_trees_sup$obs <- ape::read.nexus(here(
+  "analysis", 
+  "data", 
+  "washington-genealogies", 
+  "covid-washington-obs-max-clade-cred.trees.txt"
+))
+```
+
+Do Washington inference with each historic data option
+```{r}
+tree_lengths_sup <- wash_sample_details |> 
+  select(scenario, length) |> 
+  filter(!(scenario %in% c("historic", "trunc")))
+
+# Grid width 3 days (tree length is in years)
+tree_lengths_sup$grid_lengths <- c(
+  length(seq(
+    min(summarize_phylo(wash_trees_sup$full)$samp_times), 
+    max(summarize_phylo(wash_trees_sup$full)$coal_times), 
+    by = 3 / 365
+  )) - 1,
+  length(seq(
+    min(summarize_phylo(wash_trees_sup$obs)$samp_times), 
+    max(summarize_phylo(wash_trees_sup$obs)$coal_times), 
+    by = 3 / 365
+  )) - 1
+)
+
+wash_fits_sup <- NULL
+
+
+beta1_mean <- 1
+beta1_prec <- 1 / (0.5)^2
+time0_offset_sup <- wash_sample_details |> 
+  filter(scenario == "obs") |>  
+  pull(min_time) / 365.25
+
+set.seed(1520)
+wash_fits_sup$full_ps <- phylodyn2::BNPR_PS(
+  wash_trees_sup$full, 
+  lengthout = tree_lengths_sup$grid_lengths[tree_lengths_sup$scenario == "full"], 
+  beta1_mean = beta1_mean, 
+  beta1_prec = beta1_prec
+)
+
+set.seed(1520)
+wash_fits_sup$obs_no_ps <- correct_BNPR_time_zero_offset(
+  phylodyn2::BNPR(
+    wash_trees_sup$obs, 
+    lengthout = tree_lengths_sup$grid_lengths[tree_lengths_sup$scenario == "obs"]
+  ),
+  time0_offset = time0_offset_sup
+)
+
+set.seed(1520)
+wash_fits_sup$obs_ps <- correct_BNPR_time_zero_offset(
+  phylodyn2::BNPR_PS(
+    wash_trees_sup$obs, 
+    lengthout = tree_lengths_sup$grid_lengths[tree_lengths_sup$scenario == "obs"],
+    beta1_mean = beta1_mean, 
+    beta1_prec = beta1_prec
+  ),
+  time0_offset = time0_offset_sup
+)
+
+
+
+# PS with rd correction - historic data = subset of observed reported sequences
+# 1 month
+set.seed(1520)
+wash_fits_sup$obs_ps_rd_offset <- correct_BNPR_time_zero_offset(
+  phylodyn2::BNPR_PS_with_RD(
+    wash_trees_sup$obs, 
+    lengthout = tree_lengths_sup$grid_lengths[tree_lengths_sup$scenario == "obs"],
+    historic_reporting_delays = historic_data$all_obs_reported_subset_a$reporting_delay / 365.25,
+    rd_as_offset = TRUE,
+    time_offset = time0_offset_sup,
+    beta1_mean = beta1_mean, 
+    beta1_prec = beta1_prec
+  ),
+  time0_offset = time0_offset_sup
+)
+
+# 3 months
+set.seed(1520)
+wash_fits_sup$obs_ps_rd_offset_b <- correct_BNPR_time_zero_offset(
+  phylodyn2::BNPR_PS_with_RD(
+    wash_trees_sup$obs, 
+    lengthout = tree_lengths_sup$grid_lengths[tree_lengths_sup$scenario == "obs"],
+    historic_reporting_delays = historic_data$all_obs_reported_subset_b$reporting_delay / 365.25,
+    rd_as_offset = TRUE,
+    time_offset = time0_offset_sup,
+    beta1_mean = beta1_mean, 
+    beta1_prec = beta1_prec
+  ),
+  time0_offset = time0_offset_sup
+)
+
+# PS with rd correction - historic data = all observed reported sequences
+# 1 month
+set.seed(1520)
+wash_fits_sup$obs_ps_rd_offset_his_obs_rep_a <- correct_BNPR_time_zero_offset(
+  phylodyn2::BNPR_PS_with_RD(
+    wash_trees_sup$obs, 
+    lengthout = tree_lengths_sup$grid_lengths[tree_lengths_sup$scenario == "obs"],
+    historic_reporting_delays = historic_data$all_obs_reported_a$reporting_delay / 365.25,
+    rd_as_offset = TRUE,
+    time_offset = time0_offset_sup,
+    beta1_mean = beta1_mean, 
+    beta1_prec = beta1_prec
+  ),
+  time0_offset = time0_offset_sup
+)
+
+# 3 month set.seed(1520)
+wash_fits_sup$obs_ps_rd_offset_his_obs_rep_b <- correct_BNPR_time_zero_offset(
+  phylodyn2::BNPR_PS_with_RD(
+    wash_trees_sup$obs, 
+    lengthout = tree_lengths_sup$grid_lengths[tree_lengths_sup$scenario == "obs"],
+    historic_reporting_delays = historic_data$all_obs_reported_b$reporting_delay / 365.25,
+    rd_as_offset = TRUE,
+    time_offset = time0_offset_sup,
+    beta1_mean = beta1_mean, 
+    beta1_prec = beta1_prec
+  ),
+  time0_offset = time0_offset_sup
+)
+
+# PS with rd correction - historic data = all observed sampled sequences
+# 1 month
+set.seed(1520)
+wash_fits_sup$obs_ps_rd_offset_his_obs_samp_a <- correct_BNPR_time_zero_offset(
+  phylodyn2::BNPR_PS_with_RD(
+    wash_trees_sup$obs, 
+    lengthout = tree_lengths_sup$grid_lengths[tree_lengths_sup$scenario == "obs"],
+    historic_reporting_delays = historic_data$all_obs_sampled_a$reporting_delay / 365.25,
+    rd_as_offset = TRUE,
+    time_offset = time0_offset_sup,
+    beta1_mean = beta1_mean, 
+    beta1_prec = beta1_prec
+  ),
+  time0_offset = time0_offset_sup
+)
+
+# 3 month
+set.seed(1520)
+wash_fits_sup$obs_ps_rd_offset_his_obs_samp_b <- correct_BNPR_time_zero_offset(
+  phylodyn2::BNPR_PS_with_RD(
+    wash_trees_sup$obs, 
+    lengthout = tree_lengths_sup$grid_lengths[tree_lengths_sup$scenario == "obs"],
+    historic_reporting_delays = historic_data$all_obs_sampled_b$reporting_delay / 365.25,
+    rd_as_offset = TRUE,
+    time_offset = time0_offset_sup,
+    beta1_mean = beta1_mean, 
+    beta1_prec = beta1_prec
+  ),
+  time0_offset = time0_offset_sup
+)
+
+# PS with rd correction - historic data = all sampled sequences
+# 1 month
+set.seed(1520)
+wash_fits_sup$obs_ps_rd_offset_his_all_samp_a <- correct_BNPR_time_zero_offset(
+  phylodyn2::BNPR_PS_with_RD(
+    wash_trees_sup$obs, 
+    lengthout = tree_lengths_sup$grid_lengths[tree_lengths_sup$scenario == "obs"],
+    historic_reporting_delays = historic_data$all_sampled_a$reporting_delay / 365.25,
+    rd_as_offset = TRUE,
+    time_offset = time0_offset_sup,
+    beta1_mean = beta1_mean, 
+    beta1_prec = beta1_prec
+  ),
+  time0_offset = time0_offset_sup
+)
+
+# 3 month
+set.seed(1520)
+wash_fits_sup$obs_ps_rd_offset_his_all_samp_b <- correct_BNPR_time_zero_offset(
+  phylodyn2::BNPR_PS_with_RD(
+    wash_trees_sup$obs, 
+    lengthout = tree_lengths_sup$grid_lengths[tree_lengths_sup$scenario == "obs"],
+    historic_reporting_delays = historic_data$all_sampled_b$reporting_delay / 365.25,
+    rd_as_offset = TRUE,
+    time_offset = time0_offset_sup,
+    beta1_mean = beta1_mean, 
+    beta1_prec = beta1_prec
+  ),
+  time0_offset = time0_offset_sup
+)
+```
+
+Plot of fits
+```{r}
+wash_rd_90per <- as.numeric(quantile(
+  historic_data$all_sampled_b$reporting_delay, 
+  probs = 0.90
+))
+
+# This is just the plot from the main paper
+
+# plot_single_comparisons_main(
+#   est_fits = wash_fits_sup,
+#   truncation_time = wash_rd_90per,
+#   min_x = min(wash_sample_details$min_date) + days(1), 
+#   y_lims = c(0, 35),
+#   time_zero_date_for_real_data = wash_time_zero_date,
+#   legend_label = "Data Scenario",
+#   font_size = plot_font_size
+# ) +
+
+grp_manual_specs <- data.frame(
+  name_breaks = c("obs_no_ps", "obs_ps", "obs_ps_rd_offset", "full_ps"),
+  color_value = c("purple", "darkorange", "darkgreen", "black"),
+  linetype = c("dashed", "dashed", "dashed", "dashed"),
+  label = c(
+    "All Sampled Sequences",
+    "Observed Sampled Sequences",
+    "Observed Reported Sequences",
+    "Retrospective BNPR PS"
+  )
+)
+
+# It's easier to just work within the existing framework
+# Replace each of the original 3 inference methods of interest
+wash_fits_sup_a <- wash_fits_sup
+wash_fits_sup_a$obs_no_ps <- wash_fits_sup$obs_ps_rd_offset_his_all_samp_a
+wash_fits_sup_a$obs_ps <- wash_fits_sup$obs_ps_rd_offset_his_obs_samp_a
+wash_fits_sup_a$obs_ps_rd_offset <- wash_fits_sup$obs_ps_rd_offset_his_obs_rep_a
+
+wash_inference_rp_options_a_plot <- plot_single_comparisons_main(
+  est_fits = wash_fits_sup_a,
+  truncation_time = wash_rd_90per,
+  min_x = min(wash_sample_details$min_date) + days(1), 
+  y_lims = c(0, 35),
+  time_zero_date_for_real_data = wash_time_zero_date,
+  legend_label = "Data Scenario",
+  font_size = plot_font_size,
+  show_facet_labels = FALSE
+) +
+  scale_color_manual(
+    values = grp_manual_specs$color_value,
+    breaks = grp_manual_specs$name_breaks, 
+    labels =grp_manual_specs$label
+  ) +
+  scale_fill_manual(
+    values = grp_manual_specs$color_value,
+    breaks = grp_manual_specs$name_breaks, 
+    labels =grp_manual_specs$label
+  ) +
+  scale_linetype_manual(
+    values = grp_manual_specs$linetype,
+    breaks = grp_manual_specs$name_breaks, 
+    labels = grp_manual_specs$label
+  ) +
+  labs(
+    color = "Historic Data",
+    fill = "Historic Data",
+    linetype = "Historic Data",
+    title = "Delay-Aware BNPR PS Inference with Recent 1 Month of Historic Reporting Delays", 
+    x = ""
+  ) +
+  theme(plot.title = element_text(hjust = 0.5))
+    
+# It's easier to just work within the existing framework
+# Replace each of the original 3 inference methods of interest
+wash_fits_sup_b <- wash_fits_sup
+wash_fits_sup_b$obs_no_ps <- wash_fits_sup$obs_ps_rd_offset_his_all_samp_b
+wash_fits_sup_b$obs_ps <- wash_fits_sup$obs_ps_rd_offset_his_obs_samp_b
+wash_fits_sup_b$obs_ps_rd_offset <- wash_fits_sup$obs_ps_rd_offset_his_obs_rep_b
+
+wash_inference_rp_options_b_plot <- plot_single_comparisons_main(
+  est_fits = wash_fits_sup_b,
+  truncation_time = wash_rd_90per,
+  min_x = min(wash_sample_details$min_date) + days(1), 
+  y_lims = c(0, 35),
+  time_zero_date_for_real_data = wash_time_zero_date,
+  legend_label = "Data Scenario",
+  font_size = plot_font_size,
+  show_facet_labels = FALSE
+) +
+  scale_color_manual(
+    values = grp_manual_specs$color_value,
+    breaks = grp_manual_specs$name_breaks, 
+    labels =grp_manual_specs$label
+  ) +
+  scale_fill_manual(
+    values = grp_manual_specs$color_value,
+    breaks = grp_manual_specs$name_breaks, 
+    labels =grp_manual_specs$label
+  ) +
+  scale_linetype_manual(
+    values = grp_manual_specs$linetype,
+    breaks = grp_manual_specs$name_breaks, 
+    labels = grp_manual_specs$label
+  ) +
+  labs(
+    color = "Historic Data",
+    fill = "Historic Data",
+    linetype = "Historic Data",
+    title = "Delay-Aware BNPR PS Inference with Recent 3 Months of Historic Reporting Delays"
+  )+
+  theme(plot.title = element_text(hjust = 0.5))
+
+wash_inference_rp_options_a_plot + 
+  wash_inference_rp_options_b_plot + 
+  plot_layout(guides = "collect", ncol = 1) & theme(legend.position = "bottom")
+
+ggsave(
+  paste0(
+    fig_folder,
+    "/supplemental-materials/investigation-of-reporting-probability-options/",
+    "Washgtinton-inference-with-different-rp-options-plot.pdf"
+  ),
+  width = 5.5, height = 6
+)
+```
+
+
+
+### Investigation With a Different Reporting Delay Distribution: Santa Clara Reporting Delays
 #### Preparation
 
 ```{r set-up-common-simulation-details-sc}
@@ -1334,7 +2903,8 @@ plot_single_comparisons_main(
     truncation_time = rd_90percentile,
     min_x = 99,
     y_lims = c(0, 125),
-    eff_pop_traj = eff_pop_traj_a
+    eff_pop_traj = eff_pop_traj_a,
+    font_size = plot_font_size
 )
 # Expect warning message about 'fill'. It's because I wanted 'truth' in legend
 
@@ -1484,7 +3054,8 @@ plot_single_comparisons_main(
     truncation_time = rd_90percentile,
     min_x = 99,
     y_lims = c(0, 150),
-    eff_pop_traj = eff_pop_traj_b
+    eff_pop_traj = eff_pop_traj_b,
+    font_size = plot_font_size
 )
 # Expect warning message about 'fill'. It's because I wanted 'truth' in legend
 
@@ -1634,7 +3205,8 @@ plot_single_comparisons_main(
     min_x = 99,
     y_lims = c(0, 200),
     eff_pop_traj = eff_pop_traj_c, 
-    legend_label = "Inference"
+    legend_label = "Inference",
+    font_size = plot_font_size
 )
 # Expect warning message about 'fill'. It's because I wanted 'truth' in legend
 
@@ -1668,15 +3240,15 @@ ggsave(
 
 ```{r plot-simulation-setup-sc}
 sim_prob_reported_plot <- data.frame(
-  t = 0:(max(reporting_delays) + 6)
+  t = 0:(max(historic_sc_delays$reporting_delay) + 6)
 ) |>
   mutate(prob_reported = historic_delays_function(t)) |>
     ggplot(aes(x = t, y = prob_reported)) +
     geom_line() +
     theme_bw(base_size = plot_font_size) +
     labs(
-      x = "Sampling time (days)",
-      y = "Probability of\nbeing reported"
+      x = "Sampling Time (days)",
+      y = "Probability of\nBeing Reported"
     ) +
     scale_x_reverse()
 
@@ -1737,8 +3309,13 @@ sim_samp_times_df <- read_csv(simed_samp_times_path_a, show_col_types = FALSE) |
   ) |> 
   mutate(reported = factor(
     observed, 
-    levels = c("FALSE", "TRUE"),
-    labels = c("False", "True")
+    levels = c(
+      "TRUE", 
+      "FALSE"),
+    labels = c(
+      "Sequence Reported by Time of Analysis", 
+      "Sequence not Reported by Time of Analysis"
+    )
   )) 
 
 sim_samp_times_plot <- sim_samp_times_df |>   
@@ -1751,15 +3328,15 @@ sim_samp_times_plot <- sim_samp_times_df |>
     )
   ) +
   scale_x_reverse() +
-  scale_fill_manual(values = c("#9933FF", "black")) +
+  scale_fill_manual(values = c("black", "#9933FF")) +
   theme_bw(base_size = plot_font_size) +
   theme(
     legend.position = "bottom",
     legend.direction = "horizontal"
   ) +
   labs(
-    x = "Sampling time (days)",
-    y = "Number of\nsamples collected",
+    x = "Sampling Time (days)",
+    y = "Number of\nSamples Collected",
     fill = "Reported"
   ) 
 
@@ -1897,4 +3474,220 @@ ggsave(
   ), 
   width = 6.5, height = 5.75
 )
+```
+
+
+### Sensitivity Analysis: Different trees
+
+Read in and randomly select 
+```{r}
+# install.packages("devtools")
+# devtools::install_github("olli0601/rBEAST")
+library(rBEAST)
+
+log_every <- 2000
+burn_in <- 2.5e6
+
+all_obs_trees <- rBEAST::beast2out.read.trees(
+  here(
+    "analysis", 
+    "data", 
+    "washington-genealogies",
+    "beast-files",
+    "covid-Washington-obs.trees.txt"
+  )
+)
+
+
+tree_states <- as.numeric(str_split_i(
+  names(all_obs_trees), 
+  pattern = "STATE_", 
+  i = 2
+))
+
+num_trees_to_compare <- 5
+
+set.seed(246)
+
+trees_to_examine <- paste0(
+  "STATE_", 
+  sample(
+    tree_states[tree_states >= burn_in],
+    size = num_trees_to_compare,
+    replace = FALSE
+  )
+)
+
+wash_extra_trees <- NULL
+
+for (i in 1:num_trees_to_compare) {
+  tree_indice <- which(names(all_obs_trees) == trees_to_examine[i])
+
+  wash_extra_trees[paste0("tree", i)] <- all_obs_trees[tree_indice]
+}
+
+wash_extra_trees$obs_mcc <- ape::read.nexus(here(
+  "analysis", 
+  "data", 
+  "washington-genealogies", 
+  "covid-Washington-obs-max-clade-cred.trees.txt"
+))
+
+wash_extra_trees$full_mcc <- ape::read.nexus(here(
+  "analysis", 
+  "data", 
+  "washington-genealogies", 
+  "covid-washington-full-max-clade-cred.trees.txt"
+))
+```
+
+Set up
+```{r}
+wash_sample_details <- read_csv(
+  here(
+    "analysis", 
+    "data", 
+    "washington-sample-details.csv"
+  ),
+  show_col_types = FALSE
+)
+
+wash_time_zero_date <- wash_sample_details |> 
+  filter(scenario == "full") |> 
+  pull(max_date)
+
+wash_meta_full <- read_csv(
+  here("analysis", "data", "Washington-dates.csv"),
+  show_col_types = FALSE
+)
+
+wash_meta_historic <- wash_meta_full |>
+  filter(reported == TRUE) |> 
+  filter(reporting_date >= wash_time_zero_date - months(1))
+
+wash_rd_90per <- as.numeric(quantile(
+  wash_meta_historic$reporting_delay, 
+  probs = 0.90
+))
+
+wash_rd_fun <- phylodyn2::get_reported_prob_fn(
+  historic_reporting_delays = wash_meta_historic$reporting_delay, 
+  time_grid = 0:(max((wash_meta_historic$reporting_delay)) + 1),
+  return_log_rd_fn = FALSE
+)
+
+# Get grid lengths
+tree_lengths <- wash_sample_details |> 
+  select(scenario, length) |> 
+  filter(scenario != "historic")
+
+grid_lengths <- NULL
+
+for(i in 1:length(names(wash_extra_trees))) {
+  # Grid width 3 days (tree length is in years)
+  grid_lengths[i] <- length(
+    seq(
+      min(summarize_phylo(wash_extra_trees[[i]])$samp_times), 
+      max(summarize_phylo(wash_extra_trees[[i]])$coal_times), 
+      by = 3 / 365
+    )
+  ) - 1
+  
+  names(grid_lengths)[i] <- names(wash_extra_trees)[i]
+}
+```
+
+Do inference with each tree
+```{r}
+
+for(i in 1:(length(names(wash_extra_trees)) - 1)) {
+  obs_tree <- wash_extra_trees[[i]]
+  obs_grid_length <- as.numeric(grid_lengths[i])
+
+  wash_diff_tree_res <- NULL
+  
+  beta1_mean = 1
+  beta1_prec = 1 / (0.5)^2
+  
+  set.seed(1520)
+  wash_diff_tree_res$full_ps <- phylodyn2::BNPR_PS(
+    wash_extra_trees$full, 
+    lengthout = as.numeric(grid_lengths["full_mcc"]), 
+    beta1_mean = beta1_mean, 
+    beta1_prec = beta1_prec
+  )
+  
+  set.seed(1520)
+  wash_diff_tree_res$obs_no_ps <- correct_BNPR_time_zero_offset(
+    phylodyn2::BNPR(
+      obs_tree, 
+      lengthout = obs_grid_length
+    ),
+    time0_offset = wash_sample_details$min_time[wash_sample_details$scenario == "obs"] / 365.25
+  )
+  
+  set.seed(1520)
+  wash_diff_tree_res$obs_ps <- correct_BNPR_time_zero_offset(
+    phylodyn2::BNPR_PS(
+      obs_tree, 
+      lengthout = obs_grid_length,
+      beta1_mean = beta1_mean, 
+      beta1_prec = beta1_prec
+    ),
+    time0_offset = wash_sample_details$min_time[wash_sample_details$scenario == "obs"] / 365.25
+  )
+  
+  set.seed(1520)
+  # PS with rd correction
+  wash_diff_tree_res$obs_ps_rd_offset <- correct_BNPR_time_zero_offset(
+    phylodyn2::BNPR_PS_with_RD(
+      obs_tree, 
+      lengthout = obs_grid_length,
+      historic_reporting_delays = wash_meta_historic$reporting_delay / 365.25,
+      rd_as_offset = TRUE,
+      time_offset = wash_sample_details$min_time[wash_sample_details$scenario == "obs"] / 365.25,
+      beta1_mean = beta1_mean, 
+      beta1_prec = beta1_prec
+    ),
+    time0_offset = wash_sample_details$min_time[wash_sample_details$scenario == "obs"] / 365.25
+  )
+  
+  pdf(
+    paste0(
+      fig_folder,
+      "/supplemental-materials/real-analysis-different-trees-Washington/",
+      "washington-trees-", 
+      names(wash_extra_trees)[i], 
+      "-plot.pdf"
+    ),
+    width = 5.25, height = 3
+  )
+  
+  plot(wash_extra_trees[[i]], show.tip.label = FALSE)
+  
+  dev.off()
+  
+    
+  inf_plot <- plot_single_comparisons_main(
+    est_fits = wash_diff_tree_res,
+    truncation_time = wash_rd_90per,
+    min_x = min(wash_sample_details$min_date) + days(1), 
+    y_lims = c(0, 35),
+    time_zero_date_for_real_data = wash_time_zero_date,
+    legend_label = "Data Scenario",
+    font_size = plot_font_size
+  )
+  
+  ggsave(
+    paste0(
+      fig_folder,
+      "/supplemental-materials/real-analysis-different-trees-Washington/",
+      "washington-inference-main-", 
+      names(wash_extra_trees)[i], 
+      "-plot.pdf"
+    ),
+    width = 5.25, height = 3.5
+  )
+  
+}
 ```

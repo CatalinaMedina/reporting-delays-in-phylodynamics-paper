@@ -191,26 +191,32 @@ est_eff_pops <- function(
   )
   
   # Observed tree due to RD with RD prob offset in estimation
-  est_list$obs_ps_rd_as_offset <- suppressWarnings(phylodyn2::BNPR_PS_with_RD(
-    data = simed_trees_list$trees$obs,
-    rd_as_offset = TRUE, 
-    beta1_mean = beta1_mean,
-    beta1_prec = beta1_prec,
-    historic_reporting_delays = historic_reporting_delay_data,
-    lengthout = lengthout,
-    time0_offset_from_sim_rd = simed_trees_list$time0_offsets$obs
-  ))
+  est_list$obs_ps_rd_as_offset <- correct_BNPR_time_zero_offset(
+    suppressWarnings(phylodyn2::BNPR_PS_with_RD(
+      data = simed_trees_list$trees$obs,
+      rd_as_offset = TRUE, 
+      beta1_mean = beta1_mean,
+      beta1_prec = beta1_prec,
+      historic_reporting_delays = historic_reporting_delay_data,
+      lengthout = lengthout,
+      time_offset = simed_trees_list$time0_offsets$obs
+    )),
+    time0_offset = simed_trees_list$time0_offsets$obs
+  )
   
   # Observed tree due to RD with RD prob covariate fn in estimation
-  est_list$obs_ps_rd_as_fn <- suppressWarnings(phylodyn2::BNPR_PS_with_RD(
-    data = simed_trees_list$trees$obs,
-    rd_as_offset = FALSE,
-    beta1_mean = beta1_mean,
-    beta1_prec = beta1_prec,
-    historic_reporting_delays = historic_reporting_delay_data,
-    lengthout = lengthout,
-    time0_offset_from_sim_rd = simed_trees_list$time0_offsets$obs
-  ))
+  est_list$obs_ps_rd_as_fn <- correct_BNPR_time_zero_offset(
+    suppressWarnings(phylodyn2::BNPR_PS_with_RD(
+      data = simed_trees_list$trees$obs,
+      rd_as_offset = FALSE,
+      beta1_mean = beta1_mean,
+      beta1_prec = beta1_prec,
+      historic_reporting_delays = historic_reporting_delay_data,
+      lengthout = lengthout,
+      time_offset = simed_trees_list$time0_offsets$obs
+    )),
+    time0_offset = simed_trees_list$time0_offsets$obs
+  )
   
   # Obs truncated trees
   est_list[[paste0(trunc_names, "_nops")]] <- correct_BNPR_time_zero_offset(

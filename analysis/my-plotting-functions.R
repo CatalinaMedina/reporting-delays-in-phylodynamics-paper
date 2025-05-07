@@ -43,24 +43,24 @@ prep_est_fits_comparisons_data <- function(
       ),
       levels = c("obs", "trunc", "full"),
       labels = c(
-        "real-time inference with partially-reported data",
-        "real-time inference with partially-reported, and truncated data",
-        "retrospective inference with fully-reported data"
+        "Real-time Inference with Partially-reported Data",
+        "Real-time Inference with Partially-reported, and Truncated Data",
+        "Retrospective Inference with Fully-reported Data"
       )
     )) |>
     mutate(model = factor(
       case_when(
-        scenario %in% c("full_no_ps", "trunc_no_ps", "obs_no_ps") ~ "Model without PS",
-        scenario %in% c("full_ps", "trunc_ps", "obs_ps") ~ "PS Model",
-        scenario == "obs_ps_rd_offset" ~ "PS model with RP offset",
-        scenario == "obs_ps_rd_covariate" ~ "PS model with RP covariate",
+        scenario %in% c("full_no_ps", "trunc_no_ps", "obs_no_ps") ~ "BNPR",
+        scenario %in% c("full_ps", "trunc_ps", "obs_ps") ~ "BNPR PS",
+        scenario == "obs_ps_rd_offset" ~ "Delay-Aware BNPR PS (RP offset implementation)",
+        scenario == "obs_ps_rd_covariate" ~ "Delay-Aware BNPR PS (RP covariate implementation)",
         TRUE ~ "error"
       ),
       levels = c(
         "Model without PS", 
         "PS Model", 
-        "PS model with RP offset", 
-        "PS model with RP covariate"
+        "Delay-Aware BNPR PS (RP offset implementation)", 
+        "Delay-Aware BNPR PS (RP covariate implementation)"
       )
     )) |> 
     mutate(scenario = factor(
@@ -91,10 +91,11 @@ plot_single_comparisons_main <- function(
     truncation_time,
     min_x, # time for simulation or date for real data 
     y_lims,
+    font_size,
     eff_pop_traj = NULL,
     time_zero_date_for_real_data = NULL,
     legend_label = "Analysis",
-    font_size
+    show_facet_labels = TRUE
 ) {
   
   if (is.null(time_zero_date_for_real_data)) { # Simulations
@@ -111,11 +112,11 @@ plot_single_comparisons_main <- function(
       color = c("blue", "red", "darkgreen", "black", "black"),
       linetype = c("dashed", "dashed", "dashed", "dashed", "solid"),
       labels = c(
-        "real-time BNPR", 
-        "real-time BNPR PS", 
-        "real-time BNPR PS with RP offset", 
-        "retrospective BNPR PS",
-        "truth"
+        "Real-Time BNPR", 
+        "Real-Time BNPR PS", 
+        "Real-Time Delay-Aware BNPR PS", 
+        "Retrospective BNPR PS",
+        "Truth"
       )
     )
     
@@ -136,10 +137,10 @@ plot_single_comparisons_main <- function(
       color = c("blue", "red", "darkgreen", "black"),
       linetype = c("dashed", "dashed", "dashed", "dashed"),
       labels = c(
-        "real-time BNPR", 
-        "real-time BNPR PS", 
-        "real-time BNPR PS with RP offset", 
-        "retrospective BNPR PS"
+        "Real-Time BNPR", 
+        "Real-Time BNPR PS", 
+        "Real-Time Delay-Aware BNPR PS", 
+        "Retrospective BNPR PS"
       )
     )
     
@@ -170,9 +171,7 @@ plot_single_comparisons_main <- function(
   
   final_plot <- inference_results |>
     filter(scenario %in% subsetted_scenarios) |>
-    ggplot(
-      aes(x = plot_x_value, y = eff_pop_median, color = scenario)
-    ) +
+    ggplot(aes(x = plot_x_value, y = eff_pop_median, color = scenario)) +
     geom_line(aes(linetype = scenario)) +
     geom_ribbon(
       aes(
@@ -210,6 +209,17 @@ plot_single_comparisons_main <- function(
       ymin = -Inf, ymax = Inf,
       fill = '#00000010'
     ) +
+    # geom_text(
+    #   data = filter(data_group_details, !(scenario %in% c("full_ps", "truth"))),
+    #   aes(
+    #     x = 80, 
+    #     y = 275, 
+    #     label = scenario, 
+    #     color = scenario
+    #   ),
+    #   size = font_size,
+    #   hjust = 0
+    # ) +
     labs(
       y = "Effective Population Size",
       color = legend_label,
@@ -261,7 +271,6 @@ plot_single_comparisons_main <- function(
       legend.position = "bottom",
       legend.direction = "horizontal",
       strip.background = element_blank(),
-      strip.text.x = element_blank(),
       legend.key.size = unit(1, "lines")
     ) + 
     facet_wrap(
@@ -276,11 +285,11 @@ plot_single_comparisons_main <- function(
           #"obs_ps_rd_covariate"
         ), 
         labels = c(
-          "Real-time BNPR\nversus retrospective BNPR PS",
+          "Real-Time BNPR\nVersus Retrospective BNPR PS",
           #"Real-time BNPR\nversus retrospective BNPR PS ",
-          "Real-time BNPR PS\nversus retrospective BNPR PS",
+          "Real-Time BNPR PS\nVersus Retrospective BNPR PS",
           #"Real-time BNPR PS\nversus retrospective BNPR PS ",
-          "Real-time BNPR PS with RP offset\nversus retrospective BNPR PS"#,
+          "Real-Time Delay-Aware BNPR PS\nVersus Retrospective BNPR PS"#,
           #"Real-time BNPR PS with RP covariate\nversus retrospective BNPR PS"
         )
       ), 
@@ -294,16 +303,16 @@ plot_single_comparisons_main <- function(
       mutate(eff_pop_median = eff_pop_traj(plot_x_value))
     
     final_plot <- final_plot +
-      xlab("Time since most recently collected sample (days)") +
+      xlab("Time Prior to Present (days)") +
       scale_x_reverse(expand = c(0, 0)) +
       geom_line(
         data = true_eff_pop_df,
         aes(
           x = plot_x_value,
           y = eff_pop_median,
-          color = data_group_details$labels[data_group_details$scenario == "truth"],
-          fill = data_group_details$labels[data_group_details$scenario == "truth"],
-          linetype = data_group_details$labels[data_group_details$scenario == "truth"]
+          color = "truth",
+          fill = "truth",
+          linetype = "truth"
         )
       )
     
@@ -316,6 +325,15 @@ plot_single_comparisons_main <- function(
       ) +
       xlab("Date")
     
+  }
+  
+  if(show_facet_labels) {
+    final_plot <- final_plot +
+      theme(strip.text.x = element_text(size = font_size-1))
+      
+  } else {
+    final_plot <- final_plot +
+      theme(strip.text.x = element_blank())
   }
   
   final_plot
@@ -593,12 +611,12 @@ plot_single_comparisons_supplemental <- function(
           "obs_ps_rd_covariate"
         ), 
         labels = c(
-          "BNPR model",
-          "BNPR model ",
-          "BNPR PS model",
-          "BNPR PS model ",
-          "BNPR PS model\nwith reporting propability offset",
-          "BNPR PS model\nwith reporting probability covariate"
+          "BNPR Model",
+          "BNPR Model ",
+          "BNPR PS Model",
+          "BNPR PS Model ",
+          "Delay-Aware BNPR PS Model\nwith (RP offset implementation)",
+          "Delay-Aware BNPR PS Model\nwith (RP covariate implementation)"
         )
       ),
       nrow = 3
@@ -615,7 +633,7 @@ plot_single_comparisons_supplemental <- function(
       mutate(eff_pop_median = eff_pop_traj(plot_x_value))
     
     final_plot <- final_plot +
-      xlab("Time since most recently collected sample (days)") +
+      xlab("Time Since Most Recently Collected Sample (days)") +
       scale_x_reverse(expand = c(0, 0)) +
       geom_line(
         data = true_eff_pop_df,
@@ -675,7 +693,7 @@ plot_main_sim_inference_eval <- function(
     label = c(
       "BNPR", 
       "BNPR PS", 
-      "BNPR PS with RP offset"
+      "Delay-Aware BNPR PS"
     ),
     linetype = c("dotted", "dotted", "dotted"),
     shape = c(24, 25, 23),
@@ -762,12 +780,12 @@ plot_main_sim_inference_eval <- function(
     ) + 
     scale_x_reverse() +
     labs(
-      x = "Time since most recently collected sample (days)",
+      x = "Time Since Most Recently Collected Sample (days)",
       y = "",
-      linetype = "Real-time inference method",
-      shape = "Real-time inference method",
-      fill = "Real-time inference method",
-      color = "Real-time inference method"
+      linetype = "Real-Time Inferential Method",
+      shape = "Real-Time Inferential Method",
+      fill = "Real-Time Inferential Method",
+      color = "Real-Time Inferential Method"
     )
   
 }
@@ -802,12 +820,12 @@ plot_all_real_time_sim_inference_eval <- function(
       "obs_ps_rd_as_fn"
     ),
     label = c(
-      "BNPR with truncated data",
-      "BNPR PS with truncated data",
+      "BNPR with Truncated Data",
+      "BNPR PS with Truncated Data",
       "BNPR",
       "BNPR PS",
-      "BNPR PS with RP offset",
-      "BNPR PS with RP covariate"
+      "Delay-Aware BNPR PS (RP offset implementation)",
+      "Delay-Aware BNPR PS (RP covariate implementation)"
     ),
     linetype = c("dotted", "dotted", "dotted", "dotted", "dotted", "dotted"),
     shape = c(2, 6, 24, 25, 23, 22),
@@ -886,12 +904,12 @@ plot_all_real_time_sim_inference_eval <- function(
     ) + 
     scale_x_reverse() +
     labs(
-      x = "Time since most recently collected sample (days)",
+      x = "Time Since Most Recently Collected Sample (days)",
       y = "",
-      linetype = "Real-time inference method",
-      shape = "Real-time inference method",
-      fill = "Real-time inference method",
-      color = "Real-time inference method"
+      linetype = "Real-Time Inferential Method",
+      shape = "Real-Time Inferential Method",
+      fill = "Real-Time Inferential Method",
+      color = "Real-Time Inferential Method"
     )
   
 }
@@ -1003,12 +1021,12 @@ plot_all_retrospective_sim_inference_eval <- function(
     ) + 
     scale_x_reverse() +
     labs(
-      x = "Time since most recently collected sample (days)",
+      x = "Time Since Most Recently Collected Sample (days)",
       y = "",
-      linetype = "Retrospective inference method",
-      shape = "Retrospective inference method",
-      fill = "Retrospective inference method",
-      color = "Retrospective inference method"
+      linetype = "Retrospective Inferential Method",
+      shape = "Retrospective Inferential Method",
+      fill = "Retrospective Inferential Method",
+      color = "Retrospective Inferential Method"
     )
   
 }
@@ -1040,15 +1058,27 @@ plot_pref_samp_coeff_est <- function(pref_samp_paths) {
     bind_rows(
       beta1_est_df_c
     ) |> 
+    filter(stringr::str_detect(scenario, pattern = "_ps")) |> 
+    mutate(scenario = ifelse(
+      stringr::str_detect(scenario, pattern = "trunc"),
+      yes = "trunc_ps",
+      no = scenario
+    )) |> 
     mutate(scenario = factor(
       scenario,
       levels = c(
-        "full_ps", "trunc55_ps", "obs_ps", 
-        "obs_ps_rd_as_offset", "obs_ps_rd_as_fn"
+        "full_ps", 
+        "obs_ps", 
+        "obs_ps_rd_as_offset", 
+        "obs_ps_rd_as_fn",
+        "trunc_ps"
       ),
       labels = c(
-        "Hypothetical data", "Obs. data truncated", "Obs. data", 
-        "Obs. data with RP offset", "Obs. data with RP covariate"
+        "Retrospective BNPR PS", 
+        "Real-Time BNPR PS", 
+        "Real-Time Delay Aware BNPR PS\n(RP offset implementation)", 
+        "Real-Time Delay Aware BNPR PS\n(RP covariate implementation)",
+        "Real-Time BNPR PS\nwith Truncated Data"
       )
     ))
   
@@ -1059,9 +1089,9 @@ plot_pref_samp_coeff_est <- function(pref_samp_paths) {
     geom_hline(yintercept = 2) +
     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
     labs(
-      x = "Estimation strategy with preferential sampling model",
-      y = "Preferential sampling\ncoefficient median estimate",
-      title = "Boxplot of posterior median of preferential sampling coefficient,\nby estimation strategy and simulation scenario"
+      x = "Inferential Strategy",
+      y = "Preferential Sampling\nCoefficient Median Estimate",
+      title = "Boxplot of Posterior Median of Preferential Sampling Coefficient,\nby Inferential Strategy and Simulation Scenario"
     )
 }
 
@@ -1152,11 +1182,11 @@ print_eval_table <- function(
     kable(
       booktabs = TRUE,
       col.names = c(
-        "Time period (days)", 
+        "Time Period (days)", 
         "BNPR", "BNPR PS", 
         "Trunc. BNPR", "Tunc. BNPR PS", 
         "BNPR", "BNPR PS",
-        "BNPR PS with RP offset", "BNPR PS with RP covariate"
+        "Delay-Aware BNPR PS (RP offset implementation)", "BNPR PS (RP covariate implementation)"
       ), 
       digits = num_digits,
       escape = FALSE
@@ -1165,7 +1195,7 @@ print_eval_table <- function(
       font_size = 7,
       latex_options = c("striped", "scale_down")
     ) |> 
-    add_header_above(c(" ", "Retrospective" = 2, "Real-time inference" = 6)) |> 
+    add_header_above(c(" ", "Retrospective" = 2, "Real-Time Inference" = 6)) |> 
     pack_rows("Scenario A", row_nums[1], row_nums[2], underline = FALSE) |> 
     pack_rows("Scenario B", row_nums[3], row_nums[4], underline = FALSE) |> 
     pack_rows("Scenario C", row_nums[5], row_nums[6], underline = FALSE) |> 
