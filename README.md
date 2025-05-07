@@ -1,6 +1,6 @@
 # Accounting for reporting delays in real-time phylodynamic analyses with preferential sampling
 
-This repository contains the code to replicate the analyses conducted in the paper *Accounting for reporting delays in real-time phylodynamic analyses with preferential sampling*.
+This repository contains the code to replicate the analyses conducted in the paper [Accounting for reporting delays in real-time phylodynamic analyses with preferential sampling](https://doi.org/10.1371/journal.pcbi.1012970).
 
 ## Dependencies
 
